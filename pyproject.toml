@@ -24,7 +24,14 @@ classifiers = [
 dependencies = ["typer"]
 
 [project.optional-dependencies]
-test = ["pytest", "pytest-doctestplus", "pytest-benchmark", "coverage", "ruff"]
+test = [
+  "pytest",
+  "pytest-doctestplus",
+  "pytest-remotedata",
+  "pytest-benchmark",
+  "coverage",
+  "ruff",
+]
 
 dev = [
   "tolteca_db[test]",
@@ -92,6 +99,9 @@ filterwarnings = ["error"]
 # All rules are enabled as "error" by default; no need to specify unless overriding.
 # Example override: relax a rule for the entire project (uncomment if needed).
 # rules.TY015 = "warn"  # For invalid-argument-type, warn instead of error.
+
+[tool.ty.src]
+exclude = ["docs/conf.py"]
 
 [tool.ruff]
 line-length = 88
