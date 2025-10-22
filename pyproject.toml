@@ -3,12 +3,8 @@ name = "tolteca_db"
 dynamic = ["version"]
 description = "Data product database for TolTEC."
 readme = "README.md"
-authors = [
-  { name = "Zhiyuan Ma", email = "zhiyuanma@umass.edu" },
-]
-maintainers = [
-  { name = "Zhiyuan Ma", email = "zhiyuanma@umass.edu" },
-]
+authors = [{ name = "Zhiyuan Ma", email = "zhiyuanma@umass.edu" }]
+maintainers = [{ name = "Zhiyuan Ma", email = "zhiyuanma@umass.edu" }]
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
 requires-python = ">= 3.12"
@@ -21,16 +17,22 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: Implementation :: CPython",
 ]
-dependencies = ["typer"]
+dependencies = [
+  "typer>=0.20.0",
+  "sqlalchemy>=2.0.44",
+  "blake3>=1.0.8",
+  "alembic>=1.14.0",
+  "pydantic>=2.12.0",
+]
 
 [project.optional-dependencies]
 test = [
-  "pytest",
+  "pytest>=8.0",
   "pytest-doctestplus",
   "pytest-remotedata",
   "pytest-benchmark",
   "coverage",
-  "ruff",
+  "ruff>=0.14.0",
 ]
 
 dev = [
@@ -93,7 +95,10 @@ addopts = [
 ]
 log_cli_level = "INFO"
 xfail_strict = true
-filterwarnings = ["error"]
+filterwarnings = [
+  # Treat all warnings as errors for strict testing
+  "error",
+]
 
 [tool.ty]
 # All rules are enabled as "error" by default; no need to specify unless overriding.

@@ -209,3 +209,5 @@ src/*/_version.py
 
 # Cruft files
 .cruft.json
+
+design/
