@@ -22,6 +22,19 @@ __all__ = [
     "DrivefitMeta",
     "FocusGroupMeta",
     "NamedGroupMeta",
+    # Pydantic schemas (CLI/API boundaries)
+    "DataProductCreate",
+    "LocationCreate",
+    "FlagDefinitionCreate",
+    "DataProductFlagCreate",
+    "ReductionTaskCreate",
+    "DataProductResponse",
+    "DataProductStorageResponse",
+    "LocationResponse",
+    "FlagDefinitionResponse",
+    "DataProductFlagResponse",
+    "ReductionTaskResponse",
+    "EventLogResponse",
 ]
 
 from .metadata import (
@@ -44,4 +57,18 @@ from .orm import (
     ReductionTask,
     TaskInput,
     TaskOutput,
+)
+from .schemas import (
+    DataProductCreate,
+    DataProductFlagCreate,
+    DataProductFlagResponse,
+    DataProductResponse,
+    DataProductStorageResponse,
+    EventLogResponse,
+    FlagDefinitionCreate,
+    FlagDefinitionResponse,
+    LocationCreate,
+    LocationResponse,
+    ReductionTaskCreate,
+    ReductionTaskResponse,
 )
