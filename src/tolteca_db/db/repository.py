@@ -12,7 +12,12 @@ if TYPE_CHECKING:
 
     from sqlmodel import SQLModel
 
-__all__ = ["BaseRepository", "DataProductRepository"]
+__all__ = [
+    "BaseRepository",
+    "DataProductRepository",
+    "FlagDefinitionRepository",
+    "DataProductFlagRepository",
+]
 
 T = TypeVar("T", bound="SQLModel")
 
@@ -391,3 +396,142 @@ class DataProductRepository(BaseRepository):
             stmt = stmt.limit(limit)
 
         return list(self.session.exec(stmt).all())
+
+
+class FlagDefinitionRepository(BaseRepository):
+    """
+    Repository for FlagDefinition operations.
+
+    Manages flag definitions with lookup by name and severity filtering.
+    """
+
+    def get_by_key(self, flag_key: str) -> Any:
+        """
+        Get flag definition by key.
+
+        Parameters
+        ----------
+        flag_key : str
+            Flag key (e.g., DET_DEAD_PIXEL)
+
+        Returns
+        -------
+        FlagDefinition | None
+            Flag definition or None if not found
+        """
+        stmt = select(self.model_class).where(self.model_class.flag_key == flag_key)
+        return self.session.exec(stmt).first()
+
+    def list_by_severity(self, severity: str) -> list[Any]:
+        """
+        List flag definitions by severity level.
+
+        Parameters
+        ----------
+        severity : str
+            Severity level (INFO, WARN, BLOCK, CRITICAL)
+
+        Returns
+        -------
+        list[FlagDefinition]
+            Flag definitions matching severity
+        """
+        stmt = select(self.model_class).where(self.model_class.severity == severity)
+        return list(self.session.exec(stmt).all())
+
+    def create_from_schema(self, schema: Any) -> Any:
+        """
+        Create flag definition from Pydantic schema.
+
+        Parameters
+        ----------
+        schema : FlagDefinitionCreate
+            Pydantic schema with validated data
+
+        Returns
+        -------
+        FlagDefinition
+            Created flag definition
+        """
+        from tolteca_db.models.orm import FlagDefinition
+
+        # flag_key is the primary key - use directly from schema
+        flag_def = FlagDefinition(**schema.model_dump())
+
+        return self.create(flag_def)
+
+
+class DataProductFlagRepository(BaseRepository):
+    """
+    Repository for DataProductFlag operations.
+
+    Manages flags applied to data products with filtering by severity and status.
+    """
+
+    def list_by_product(self, product_fk: str) -> list[Any]:
+        """
+        List all flags for a product.
+
+        Parameters
+        ----------
+        product_fk : str
+            Product foreign key
+
+        Returns
+        -------
+        list[DataProductFlag]
+            Flags applied to the product
+        """
+        stmt = select(self.model_class).where(
+            self.model_class.product_fk == product_fk
+        )
+        return list(self.session.exec(stmt).all())
+
+    def list_by_severity(self, product_fk: str, severity: str) -> list[Any]:
+        """
+        List flags for a product filtered by severity.
+
+        Parameters
+        ----------
+        product_fk : str
+            Product foreign key
+        severity : str
+            Severity level to filter
+
+        Returns
+        -------
+        list[DataProductFlag]
+            Flags matching criteria
+        """
+        from tolteca_db.models import FlagDefinition
+
+        stmt = (
+            select(self.model_class)
+            .join(FlagDefinition)
+            .where(
+                self.model_class.product_fk == product_fk,
+                FlagDefinition.severity == severity,
+            )
+        )
+        return list(self.session.exec(stmt).all())
+
+    def create_from_schema(self, schema: Any) -> Any:
+        """
+        Create data product flag from Pydantic schema.
+
+        Parameters
+        ----------
+        schema : DataProductFlagCreate
+            Pydantic schema with validated data
+
+        Returns
+        -------
+        DataProductFlag
+            Created flag
+        """
+        from tolteca_db.models.orm import DataProductFlag
+
+        # Composite PK (product_fk, flag_key) - use directly from schema
+        flag = DataProductFlag(**schema.model_dump())
+
+        return self.create(flag)

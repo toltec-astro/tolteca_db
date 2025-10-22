@@ -40,6 +40,7 @@ if TYPE_CHECKING:
 __all__ = [
     # Input schemas (CLI validation)
     "DataProductCreate",
+    "DataProductStorageCreate",
     "LocationCreate",
     "FlagDefinitionCreate",
     "DataProductFlagCreate",
@@ -124,6 +125,45 @@ class DataProductCreate(BaseModel):
     )
 
 
+class DataProductStorageCreate(BaseModel):
+    """Schema for creating a DataProductStorage record."""
+
+    product_fk: str = Field(
+        ...,
+        description="Product foreign key",
+    )
+    location_fk: str = Field(
+        ...,
+        description="Location foreign key",
+    )
+    storage_key: str = Field(
+        ...,
+        min_length=1,
+        max_length=512,
+        description="Storage path or URI",
+    )
+    size: int | None = Field(
+        None,
+        ge=0,
+        description="File size in bytes",
+    )
+    role: str = Field(
+        "PRIMARY",
+        pattern="^(PRIMARY|MIRROR|TEMP)$",
+        description="Storage role",
+    )
+    availability_state: str | None = Field(
+        None,
+        pattern="^(AVAILABLE|MISSING|REMOTE|STAGED)$",
+        description="Availability state",
+    )
+    checksum: str | None = Field(
+        None,
+        max_length=128,
+        description="Checksum for verification",
+    )
+
+
 class LocationCreate(BaseModel):
     """Schema for creating a Location via CLI."""
 
@@ -161,7 +201,7 @@ class FlagDefinitionCreate(BaseModel):
     )
     group_key: str = Field(
         ...,
-        max_length=16,
+        max_length=32,
         pattern="^[A-Z]+$",
         description="Flag group (DET, TEL, QA, CAL, ING)",
     )
@@ -184,9 +224,9 @@ class FlagDefinitionCreate(BaseModel):
 class DataProductFlagCreate(BaseModel):
     """Schema for flagging a product via CLI."""
 
-    product_pk: str = Field(
+    product_fk: str = Field(
         ...,
-        description="Product primary key to flag",
+        description="Product foreign key to flag",
     )
     flag_key: str = Field(
         ...,

@@ -211,12 +211,12 @@ class TestDataProductFlagCreate:
     def test_valid_flag_assignment(self) -> None:
         """Test creating valid flag assignment."""
         data = DataProductFlagCreate(
-            product_pk="product_pk_123",
+            product_fk="product_pk_123",
             flag_key="DET_DEAD_PIXEL",
             asserted_by="qa_pipeline",
             details={"pixel_index": 42},
         )
-        assert data.product_pk == "product_pk_123"
+        assert data.product_fk == "product_pk_123"
         assert data.flag_key == "DET_DEAD_PIXEL"
         assert data.asserted_by == "qa_pipeline"
         assert data.details == {"pixel_index": 42}
@@ -224,7 +224,7 @@ class TestDataProductFlagCreate:
     def test_details_defaults_to_empty_dict(self) -> None:
         """Test details defaults to empty dict."""
         data = DataProductFlagCreate(
-            product_pk="product_pk_123",
+            product_fk="product_pk_123",
             flag_key="DET_DEAD_PIXEL",
         )
         assert data.details == {}
