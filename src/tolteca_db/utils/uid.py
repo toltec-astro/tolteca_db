@@ -15,10 +15,10 @@ from typing import TypedDict
 
 __all__ = [
     "RawObsIdentity",
-    "make_raw_obs_uid",
-    "make_reduced_obs_uid",
     "make_cal_group_uid",
     "make_group_uid",
+    "make_raw_obs_uid",
+    "make_reduced_obs_uid",
     "parse_raw_obs_uid",
 ]
 
@@ -73,7 +73,7 @@ def make_raw_obs_uid(master: str, obsnum: int, subobsnum: int, scannum: int) -> 
 
 
 def make_reduced_obs_uid(
-    master: str, obsnum: int, subobsnum: int, scannum: int
+    master: str, obsnum: int, subobsnum: int, scannum: int,
 ) -> str:
     """
     Generate UID for reduced observation data product (dp_reduced_obs).
@@ -210,7 +210,7 @@ def parse_raw_obs_uid(uid: str) -> RawObsIdentity:
     if not match:
         raise ValueError(
             f"Invalid raw observation UID format: {uid}. "
-            f"Expected format: {{master}}-{{obsnum}}-{{subobsnum}}-{{scannum}}"
+            f"Expected format: {{master}}-{{obsnum}}-{{subobsnum}}-{{scannum}}",
         )
 
     master, obsnum_str, subobsnum_str, scannum_str = match.groups()

@@ -5,23 +5,23 @@ from __future__ import annotations
 from enum import Enum, Flag, auto
 
 __all__ = [
-    "BaseType",
-    "ProductKind",
-    "ReducedStatus",
-    "RAWAvailability",
     "AssocType",
-    "TaskStatus",
-    "FlagSeverity",
-    "StorageRole",
-    "DataProdType",
+    "BaseType",
     "DataProdAssocType",
+    "DataProdType",
+    "FlagSeverity",
+    "ProductKind",
+    "RAWAvailability",
+    "ReducedStatus",
+    "StorageRole",
+    "TaskStatus",
     "ToltecDataKind",
 ]
 
 
 class BaseType(str, Enum):
     """Product base types."""
-    
+
     RAW_OBS = "raw_obs"
     REDUCED_OBS = "reduced_obs"
     INPUT_SET = "input_set"
@@ -29,21 +29,21 @@ class BaseType(str, Enum):
 
 class ProductKind(str, Enum):
     """Product kind discriminator for unified table."""
-    
+
     RAW = "RAW"
     REDUCED = "REDUCED"
 
 
 class ReducedStatus(str, Enum):
     """Lifecycle status for REDUCED products."""
-    
+
     ACTIVE = "ACTIVE"
     SUPERSEDED = "SUPERSEDED"
 
 
 class RAWAvailability(str, Enum):
     """Physical availability state for RAW products."""
-    
+
     AVAILABLE = "AVAILABLE"
     MISSING = "MISSING"
     REMOTE = "REMOTE"
@@ -52,14 +52,14 @@ class RAWAvailability(str, Enum):
 
 class AssocType(str, Enum):
     """Association edge types for provenance graph."""
-    
+
     PROCESS_EDGE = "process_edge"
     GROUP_MEMBER = "group_member"
 
 
 class TaskStatus(str, Enum):
     """Reduction task status."""
-    
+
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
     DONE = "DONE"
@@ -68,7 +68,7 @@ class TaskStatus(str, Enum):
 
 class FlagSeverity(str, Enum):
     """Quality flag severity levels."""
-    
+
     INFO = "INFO"
     WARN = "WARN"
     BLOCK = "BLOCK"
@@ -77,7 +77,7 @@ class FlagSeverity(str, Enum):
 
 class StorageRole(str, Enum):
     """Storage location role."""
-    
+
     PRIMARY = "PRIMARY"
     MIRROR = "MIRROR"
     TEMP = "TEMP"
@@ -97,18 +97,18 @@ class DataProdType(str, Enum):
     
     Reference: ADR-009 in design/architecture.md
     """
-    
+
     # Observation-level (L0/L1)
     DP_RAW_OBS = "dp_raw_obs"           # All detector acquisitions (VnaSweep, TargSweep, Tune, RawTimeStream)
     DP_REDUCED_OBS = "dp_reduced_obs"   # Calibrated observations (inline or offline)
-    
+
     # Analysis-level (L2+)
     DP_CAL_GROUP = "dp_cal_group"       # Calibration groupings for analysis
     DP_DRIVEFIT = "dp_drivefit"         # Detector characterization
     DP_FOCUS_GROUP = "dp_focus_group"   # Focus analysis groupings
     DP_MAP = "dp_map"                   # Science maps (future)
     DP_CATALOG = "dp_catalog"           # Source catalogs (future)
-    
+
     # Meta-level
     DP_NAMED_GROUP = "dp_named_group"   # User-defined collections
 
@@ -120,26 +120,26 @@ class DataProdAssocType(str, Enum):
     
     Reference: ADR-009 in design/architecture.md
     """
-    
+
     # Calibration relationships (self-referencing on dp_raw_obs)
     DPA_RAW_OBS_CAL_OBS = "dpa_raw_obs_cal_obs"
     # "raw obs uses cal obs as calibration source"
     # Examples: RawTimeStream → Tune, Tune → VnaSweep
-    
+
     # Reduction relationships
     DPA_REDUCED_OBS_RAW_OBS = "dpa_reduced_obs_raw_obs"
     # "reduced obs derived from raw obs"
-    
+
     # Analysis relationships
     DPA_CAL_GROUP_RAW_OBS = "dpa_cal_group_raw_obs"
     # "cal group contains raw obs"
-    
+
     DPA_DRIVEFIT_RAW_OBS = "dpa_drivefit_raw_obs"
     # "drivefit uses raw obs"
-    
+
     DPA_FOCUS_GROUP_RAW_OBS = "dpa_focus_group_raw_obs"
     # "focus group contains raw obs"
-    
+
     # Generic collection
     DPA_NAMED_GROUP_DATA_PROD = "dpa_named_group_data_prod"
     # "named group contains any data product"
@@ -154,14 +154,14 @@ class ToltecDataKind(Flag):
     
     Reference: tolteca_v2/toltec/types.py, ADR-009
     """
-    
+
     # Sweep types (calibration modes)
     VnaSweep = auto()       # Vector Network Analyzer sweep (bootstrapping)
     TargetSweep = auto()    # Target sweep (refinement)
     Tune = auto()           # Tune sweep (fine adjustment)
-    
+
     # Composite sweep category
     RawSweep = VnaSweep | TargetSweep | Tune
-    
+
     # Nominal observation mode
     RawTimeStream = auto()  # Science timestream data

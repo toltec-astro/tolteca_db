@@ -93,7 +93,7 @@ class TestDataProduct:
     def test_create_raw_obs_product(self, session):
         """Test creating a RAW product."""
         product = DataProduct(
-            product_id="test_raw_001",
+            product_pk="test_raw_001",
             base_type=BaseType.RAW_OBS.value,
             name="obs_12345",
             product_kind=ProductKind.RAW.value,
@@ -102,14 +102,14 @@ class TestDataProduct:
         session.add(product)
         session.commit()
 
-        assert product.product_id == "test_raw_001"
+        assert product.product_pk == "test_raw_001"
         assert product.product_kind == ProductKind.RAW.value
         assert product.base_type == BaseType.RAW_OBS.value
 
     def test_create_reduced_obs_product(self, session):
         """Test creating a REDUCED product."""
         product = DataProduct(
-            product_id="test_reduced_001",
+            product_pk="test_reduced_001",
             base_type=BaseType.REDUCED_OBS.value,
             name="reduced_12345",
             product_kind=ProductKind.REDUCED.value,
@@ -118,20 +118,20 @@ class TestDataProduct:
         session.add(product)
         session.commit()
 
-        assert product.product_id == "test_reduced_001"
+        assert product.product_pk == "test_reduced_001"
         assert product.product_kind == ProductKind.REDUCED.value
 
-    def test_product_id_unique_constraint(self, session):
-        """Test that product_id must be unique."""
+    def test_product_pk_unique_constraint(self, session):
+        """Test that product_pk must be unique."""
         product1 = DataProduct(
-            product_id="duplicate_id",
+            product_pk="duplicate_pk",
             base_type=BaseType.RAW_OBS.value,
             name="obs_1",
             product_kind=ProductKind.RAW.value,
         )
 
         product2 = DataProduct(
-            product_id="duplicate_id",  # Same ID
+            product_pk="duplicate_pk",  # Same PK
             base_type=BaseType.RAW_OBS.value,
             name="obs_2",
             product_kind=ProductKind.RAW.value,
@@ -154,7 +154,7 @@ class TestDataProductStorage:
         """Test product-storage relationship."""
         # Create location
         location = Location(
-            location_id="lmt_archive",
+            location_pk="lmt_archive",
             label="LMT Archive",
             site_code="LMT",
         )
@@ -162,7 +162,7 @@ class TestDataProductStorage:
 
         # Create product
         product = DataProduct(
-            product_id="test_001",
+            product_pk="test_001",
             base_type=BaseType.RAW_OBS.value,
             name="obs_12345",
             product_kind=ProductKind.RAW.value,
@@ -172,8 +172,8 @@ class TestDataProductStorage:
 
         # Create storage
         storage = DataProductStorage(
-            product_id=product.product_id,
-            location_id=location.location_id,
+            product_fk=product.product_pk,
+            location_fk=location.location_pk,
             storage_key="/data/obs_12345.nc",
             role=StorageRole.PRIMARY.value,
         )
@@ -183,13 +183,13 @@ class TestDataProductStorage:
         # Verify relationships
         retrieved_product = session.get(DataProduct, "test_001")
         assert len(retrieved_product.storage_locations) == 1
-        assert retrieved_product.storage_locations[0].location_id == "lmt_archive"
+        assert retrieved_product.storage_locations[0].location_fk == "lmt_archive"
 
     def test_cascade_delete_storage(self, session):
         """Test that deleting product cascades to storage."""
         # Create location
         location = Location(
-            location_id="test_loc",
+            location_pk="test_loc",
             label="Test Location",
             site_code="TEST",
         )
@@ -197,7 +197,7 @@ class TestDataProductStorage:
 
         # Create product with storage
         product = DataProduct(
-            product_id="cascade_test",
+            product_pk="cascade_test",
             base_type=BaseType.RAW_OBS.value,
             name="obs_cascade",
             product_kind=ProductKind.RAW.value,
@@ -206,8 +206,8 @@ class TestDataProductStorage:
         session.commit()
 
         storage = DataProductStorage(
-            product_id=product.product_id,
-            location_id=location.location_id,
+            product_fk=product.product_pk,
+            location_fk=location.location_pk,
             storage_key="/data/cascade.nc",
         )
         session.add(storage)
@@ -220,7 +220,7 @@ class TestDataProductStorage:
         # Verify storage is deleted (cascade)
         from sqlalchemy import select
         stmt = select(DataProductStorage).where(
-            DataProductStorage.product_id == "cascade_test"
+            DataProductStorage.product_fk == "cascade_test"
         )
         result = session.execute(stmt).first()
         assert result is None
@@ -233,13 +233,13 @@ class TestDataProductAssoc:
         """Test creating provenance edges."""
         # Create raw and reduced products
         raw_product = DataProduct(
-            product_id="raw_001",
+            product_pk="raw_001",
             base_type=BaseType.RAW_OBS.value,
             name="raw_obs",
             product_kind=ProductKind.RAW.value,
         )
         reduced_product = DataProduct(
-            product_id="reduced_001",
+            product_pk="reduced_001",
             base_type=BaseType.REDUCED_OBS.value,
             name="reduced_obs",
             product_kind=ProductKind.REDUCED.value,
@@ -250,8 +250,8 @@ class TestDataProductAssoc:
         # Create provenance edge
         assoc = DataProductAssoc(
             assoc_type=AssocType.PROCESS_EDGE.value,
-            src_product_id="raw_001",
-            dst_product_id="reduced_001",
+            src_product_fk="raw_001",
+            dst_product_fk="reduced_001",
             process_module="tolteca.reduce",
             process_version="2.0.0",
         )
@@ -259,9 +259,9 @@ class TestDataProductAssoc:
         session.commit()
 
         # Verify
-        assert assoc.assoc_id is not None
-        assert assoc.src_product_id == "raw_001"
-        assert assoc.dst_product_id == "reduced_001"
+        assert assoc.assoc_pk is not None
+        assert assoc.src_product_fk == "raw_001"
+        assert assoc.dst_product_fk == "reduced_001"
 
 
 class TestFlagDefinition:
@@ -321,7 +321,7 @@ class TestDataProductFlag:
 
         # Create product
         product = DataProduct(
-            product_id="flagged_001",
+            product_pk="flagged_001",
             base_type=BaseType.RAW_OBS.value,
             name="flagged_obs",
             product_kind=ProductKind.RAW.value,
@@ -331,7 +331,7 @@ class TestDataProductFlag:
 
         # Assign flag
         flag_assignment = DataProductFlag(
-            product_id=product.product_id,
+            product_fk=product.product_pk,
             flag_key=flag_def.flag_key,
             asserted_by="test_user",
         )
@@ -350,7 +350,7 @@ class TestReductionTask:
     def test_create_reduction_task(self, session):
         """Test creating a reduction task."""
         task = ReductionTask(
-            task_id="task_001",
+            task_pk="task_001",
             status=TaskStatus.QUEUED.value,
             params_hash="abc123",
             params={"threshold": 5.0},
@@ -360,20 +360,20 @@ class TestReductionTask:
         session.add(task)
         session.commit()
 
-        assert task.task_id == "task_001"
+        assert task.task_pk == "task_001"
         assert task.status == TaskStatus.QUEUED.value
 
     def test_task_with_inputs_outputs(self, session):
         """Test task with input and output relationships."""
         # Create products
         input_product = DataProduct(
-            product_id="input_001",
+            product_pk="input_001",
             base_type=BaseType.RAW_OBS.value,
             name="input",
             product_kind=ProductKind.RAW.value,
         )
         output_product = DataProduct(
-            product_id="output_001",
+            product_pk="output_001",
             base_type=BaseType.REDUCED_OBS.value,
             name="output",
             product_kind=ProductKind.REDUCED.value,
@@ -383,7 +383,7 @@ class TestReductionTask:
 
         # Create task
         task = ReductionTask(
-            task_id="task_002",
+            task_pk="task_002",
             status=TaskStatus.DONE.value,
             params_hash="hash123",
             params={"method": "standard"},
@@ -394,13 +394,13 @@ class TestReductionTask:
 
         # Add input and output
         task_input = TaskInput(
-            task_id=task.task_id,
-            product_id="input_001",
+            task_fk=task.task_pk,
+            product_fk="input_001",
             role="science",
         )
         task_output = TaskOutput(
-            task_id=task.task_id,
-            product_id="output_001",
+            task_fk=task.task_pk,
+            product_fk="output_001",
         )
         session.add_all([task_input, task_output])
         session.commit()
@@ -418,7 +418,7 @@ class TestEventLog:
         """Test creating an event log entry."""
         # Create product
         product = DataProduct(
-            product_id="event_test",
+            product_pk="event_test",
             base_type=BaseType.RAW_OBS.value,
             name="event_obs",
             product_kind=ProductKind.RAW.value,
@@ -430,7 +430,7 @@ class TestEventLog:
         event = EventLog(
             event_type="STATUS_CHANGE",
             entity_type="product",
-            entity_id=product.product_id,
+            entity_id=product.product_pk,
             payload={"old_status": "MISSING", "new_status": "AVAILABLE"},
         )
         session.add(event)
@@ -447,7 +447,7 @@ class TestLocation:
     def test_create_location(self, session):
         """Test creating a storage location."""
         location = Location(
-            location_id="umass_cache",
+            location_pk="umass_cache",
             label="UMass Cache",
             site_code="UMASS",
             priority=10,
@@ -456,19 +456,19 @@ class TestLocation:
         session.add(location)
         session.commit()
 
-        assert location.location_id == "umass_cache"
+        assert location.location_pk == "umass_cache"
         assert location.site_code == "UMASS"
         assert location.priority == 10
 
     def test_location_label_unique(self, session):
         """Test that location label must be unique."""
         loc1 = Location(
-            location_id="loc1",
+            location_pk="loc1",
             label="Primary Archive",
             site_code="LMT",
         )
         loc2 = Location(
-            location_id="loc2",
+            location_pk="loc2",
             label="Primary Archive",  # Duplicate label
             site_code="UMASS",
         )
@@ -488,7 +488,7 @@ class TestComplexRelationships:
         """Test complete workflow with all relationships."""
         # Create location
         location = Location(
-            location_id="workflow_loc",
+            location_pk="workflow_loc",
             label="Workflow Location",
             site_code="TEST",
         )
@@ -502,7 +502,7 @@ class TestComplexRelationships:
 
         # Create raw product
         raw_product = DataProduct(
-            product_id="workflow_raw",
+            product_pk="workflow_raw",
             base_type=BaseType.RAW_OBS.value,
             name="workflow_raw_obs",
             product_kind=ProductKind.RAW.value,
@@ -510,7 +510,7 @@ class TestComplexRelationships:
 
         # Create reduced product
         reduced_product = DataProduct(
-            product_id="workflow_reduced",
+            product_pk="workflow_reduced",
             base_type=BaseType.REDUCED_OBS.value,
             name="workflow_reduced_obs",
             product_kind=ProductKind.REDUCED.value,
@@ -521,22 +521,22 @@ class TestComplexRelationships:
 
         # Add storage
         storage = DataProductStorage(
-            product_id="workflow_raw",
-            location_id="workflow_loc",
+            product_fk="workflow_raw",
+            location_fk="workflow_loc",
             storage_key="/data/workflow.nc",
         )
 
         # Add flag
         flag = DataProductFlag(
-            product_id="workflow_raw",
+            product_fk="workflow_raw",
             flag_key="WORKFLOW_FLAG",
         )
 
         # Add provenance
         assoc = DataProductAssoc(
             assoc_type=AssocType.PROCESS_EDGE.value,
-            src_product_id="workflow_raw",
-            dst_product_id="workflow_reduced",
+            src_product_fk="workflow_raw",
+            dst_product_fk="workflow_reduced",
         )
 
         session.add_all([storage, flag, assoc])
@@ -550,7 +550,7 @@ class TestComplexRelationships:
         # Verify provenance exists
         from sqlalchemy import select
         stmt = select(DataProductAssoc).where(
-            DataProductAssoc.src_product_id == "workflow_raw"
+            DataProductAssoc.src_product_fk == "workflow_raw"
         )
         result = session.execute(stmt).first()
         assert result is not None

@@ -9,20 +9,18 @@ Reference: ADR-009 in design/architecture.md
 
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, Field
 
-from tolteca_db.constants import DataProdType, ToltecDataKind
+from tolteca_db.constants import DataProdType
 
 __all__ = [
-    "DataProdMetaBase",
-    "RawObsMeta",
-    "ReducedObsMeta",
     "CalGroupMeta",
+    "DataProdMetaBase",
     "DrivefitMeta",
     "FocusGroupMeta",
     "NamedGroupMeta",
+    "RawObsMeta",
+    "ReducedObsMeta",
 ]
 
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from sqlalchemy.ext.compiler import compiles
@@ -29,7 +29,7 @@ def utc_now() -> datetime:
     >>> now.tzinfo == timezone.utc
     True
     """
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 class utcnow(expression.FunctionElement):  # noqa: N801
@@ -49,7 +49,7 @@ class utcnow(expression.FunctionElement):  # noqa: N801
     ...     server_default=utcnow()
     ... )
     """
-    
+
     type = sa.DateTime()
     inherit_cache = True
 

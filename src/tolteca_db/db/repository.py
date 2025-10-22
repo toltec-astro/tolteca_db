@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 
 if TYPE_CHECKING:
     from typing import Any
+
     from sqlmodel import SQLModel
 
 __all__ = ["BaseRepository", "DataProductRepository"]
@@ -161,7 +162,7 @@ class DataProductRepository(BaseRepository):
         """
         stmt = select(self.model_class).where(
             self.model_class.base_type == base_type,
-            self.model_class.name == name
+            self.model_class.name == name,
         )
         return self.session.exec(stmt).first()
 
@@ -187,39 +188,39 @@ class DataProductRepository(BaseRepository):
         See viscore repository.py for implementation pattern.
         """
         from tolteca_db.models import DataProductFlag, FlagDefinition
-        
+
         # Start with RAW products that are AVAILABLE
         stmt = select(self.model_class).where(
             self.model_class.product_kind == "RAW",
-            self.model_class.availability_state == "AVAILABLE"
+            self.model_class.availability_state == "AVAILABLE",
         )
-        
+
         if base_type:
             stmt = stmt.where(self.model_class.base_type == base_type)
-        
+
         # Exclude products with BLOCK/CRITICAL flags
         # NOT EXISTS subquery pattern
         blocking_flags_subquery = (
-            select(DataProductFlag.product_id)
+            select(DataProductFlag.product_fk)
             .join(FlagDefinition)
             .where(
-                DataProductFlag.product_id == self.model_class.product_id,
+                DataProductFlag.product_fk == self.model_class.product_pk,
                 FlagDefinition.severity.in_(["BLOCK", "CRITICAL"]),
-                FlagDefinition.active == True  # noqa: E712
+                FlagDefinition.active == True,  # noqa: E712
             )
         )
-        stmt = stmt.where(~self.model_class.product_id.in_(blocking_flags_subquery))
-        
+        stmt = stmt.where(~self.model_class.product_pk.in_(blocking_flags_subquery))
+
         return list(self.session.exec(stmt).all())
 
-    def supersede_reduced(self, product_id: str) -> Any:
+    def supersede_reduced(self, product_pk: str) -> Any:
         """
         Mark REDUCED product as SUPERSEDED.
 
         Parameters
         ----------
-        product_id : str
-            Product ID to supersede
+        product_pk : str
+            Product primary key to supersede
 
         Returns
         -------
@@ -231,15 +232,15 @@ class DataProductRepository(BaseRepository):
         ValueError
             If product not found or not REDUCED
         """
-        product = self.get(product_id)
+        product = self.get(product_pk)
         if not product:
-            msg = f"Product {product_id} not found"
+            msg = f"Product {product_pk} not found"
             raise ValueError(msg)
-        
+
         if product.product_kind != "REDUCED":
-            msg = f"Product {product_id} is not REDUCED"
+            msg = f"Product {product_pk} is not REDUCED"
             raise ValueError(msg)
-        
+
         product.status = "SUPERSEDED"
         return self.update(product)
 
@@ -259,12 +260,12 @@ class DataProductRepository(BaseRepository):
         """
         stmt = select(self.model_class).where(
             self.model_class.product_kind == "REDUCED",
-            self.model_class.status == "ACTIVE"
+            self.model_class.status == "ACTIVE",
         )
-        
+
         if base_type:
             stmt = stmt.where(self.model_class.base_type == base_type)
-        
+
         return list(self.session.exec(stmt).all())
 
     def get_with_storage(self, id_value: Any) -> Any:
@@ -285,13 +286,13 @@ class DataProductRepository(BaseRepository):
 
         Examples
         --------
-        >>> product = repo.get_with_storage("product_id_123")
+        >>> product = repo.get_with_storage("product_pk_123")
         >>> for storage in product.storage_locations:  # No extra query
         ...     print(storage.storage_key)
         """
         stmt = (
             select(self.model_class)
-            .where(self.model_class.product_id == id_value)
+            .where(self.model_class.product_pk == id_value)
             .options(selectinload(self.model_class.storage_locations))
         )
         return self.session.exec(stmt).first()
@@ -314,7 +315,7 @@ class DataProductRepository(BaseRepository):
         """
         stmt = (
             select(self.model_class)
-            .where(self.model_class.product_id == id_value)
+            .where(self.model_class.product_pk == id_value)
             .options(selectinload(self.model_class.flags))
         )
         return self.session.exec(stmt).first()
@@ -342,10 +343,10 @@ class DataProductRepository(BaseRepository):
         """
         stmt = (
             select(self.model_class)
-            .where(self.model_class.product_id == id_value)
+            .where(self.model_class.product_pk == id_value)
             .options(
                 selectinload(self.model_class.storage_locations),
-                selectinload(self.model_class.flags)
+                selectinload(self.model_class.flags),
             )
         )
         return self.session.exec(stmt).first()
@@ -353,7 +354,7 @@ class DataProductRepository(BaseRepository):
     def list_with_storage(
         self,
         base_type: str | None = None,
-        limit: int | None = None
+        limit: int | None = None,
     ) -> list[Any]:
         """
         List products with storage locations eagerly loaded.
@@ -380,13 +381,13 @@ class DataProductRepository(BaseRepository):
         ...         print(storage.location_id)
         """
         stmt = select(self.model_class).options(
-            selectinload(self.model_class.storage_locations)
+            selectinload(self.model_class.storage_locations),
         )
-        
+
         if base_type:
             stmt = stmt.where(self.model_class.base_type == base_type)
-        
+
         if limit:
             stmt = stmt.limit(limit)
-        
+
         return list(self.session.exec(stmt).all())

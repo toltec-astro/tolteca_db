@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-__all__ = ["product_id_hash", "content_hash", "params_hash", "input_set_hash"]
+__all__ = ["content_hash", "input_set_hash", "params_hash", "product_id_hash"]
 
 # Try blake3 first, fall back to sha256
 try:
@@ -47,7 +47,7 @@ def product_id_hash(base_type: str, identity: dict) -> str:
     canonical = json.dumps(
         {"base_type": base_type, **identity},
         sort_keys=True,
-        separators=(',', ':')
+        separators=(",", ":"),
     )
     if HAS_BLAKE3:
         return blake3.blake3(canonical.encode()).hexdigest()
@@ -106,7 +106,7 @@ def params_hash(params: dict) -> str:
     >>> len(hash1)
     32
     """
-    canonical = json.dumps(params, sort_keys=True, separators=(',', ':'))
+    canonical = json.dumps(params, sort_keys=True, separators=(",", ":"))
     if HAS_BLAKE3:
         return blake3.blake3(canonical.encode()).hexdigest()[:32]
     return hashlib.sha256(canonical.encode()).hexdigest()[:32]
@@ -137,7 +137,7 @@ def input_set_hash(product_ids: list[str]) -> str:
     32
     """
     # Sort for determinism
-    canonical = json.dumps(sorted(product_ids), separators=(',', ':'))
+    canonical = json.dumps(sorted(product_ids), separators=(",", ":"))
     if HAS_BLAKE3:
         return blake3.blake3(canonical.encode()).hexdigest()[:32]
     return hashlib.sha256(canonical.encode()).hexdigest()[:32]

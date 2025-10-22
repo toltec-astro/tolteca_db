@@ -9,9 +9,10 @@ from sqlmodel import Session, SQLModel, create_engine
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+
     from sqlalchemy.engine import Engine
 
-__all__ = ["get_engine", "create_db_and_tables", "get_session"]
+__all__ = ["create_db_and_tables", "get_engine", "get_session"]
 
 
 def get_engine(database_url: str, echo: bool = False) -> Engine:
