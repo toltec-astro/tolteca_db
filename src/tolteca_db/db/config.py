@@ -22,7 +22,11 @@ def get_engine(database_url: str, echo: bool = False) -> Engine:
     Parameters
     ----------
     database_url : str
-        Database connection URL (e.g., sqlite:///./tolteca_db.sqlite)
+        Database connection URL
+        Examples:
+        - In-memory: "duckdb:///:memory:"
+        - File: "duckdb:///./tolteca.duckdb"
+        - Absolute path: "duckdb:////absolute/path/tolteca.duckdb"
     echo : bool, optional
         Whether to echo SQL statements, by default False
 
@@ -33,11 +37,32 @@ def get_engine(database_url: str, echo: bool = False) -> Engine:
 
     Examples
     --------
-    >>> engine = get_engine("sqlite:///./test.db")
-    >>> engine.url.database
-    './test.db'
+    >>> engine = get_engine("duckdb:///./tolteca.duckdb")
+    >>> # Configure DuckDB settings
+    >>> with engine.connect() as conn:
+    ...     conn.execute("SET threads TO 4")
+    ...     conn.execute("SET memory_limit = '4GB'")
+    
+    Notes
+    -----
+    DuckDB is optimized for OLAP workloads with columnar-vectorized
+    execution (10-100x faster than SQLite for analytical queries).
     """
-    return create_engine(database_url, echo=echo)
+    engine = create_engine(database_url, echo=echo)
+    
+    # Configure DuckDB for analytical workloads
+    if database_url.startswith("duckdb://"):
+        from sqlalchemy import event
+        
+        @event.listens_for(engine, "connect")
+        def configure_duckdb(dbapi_conn, connection_record):
+            # Set optimal defaults for analytical queries
+            dbapi_conn.execute("SET threads TO 4")  # Adjust based on CPU
+            dbapi_conn.execute("SET memory_limit = '4GB'")  # Adjust based on RAM
+            dbapi_conn.execute("SET temp_directory = 'scratch/duckdb_temp'")
+            dbapi_conn.execute("SET enable_object_cache = true")
+    
+    return engine
 
 
 def create_db_and_tables(engine: Engine) -> None:
@@ -51,7 +76,7 @@ def create_db_and_tables(engine: Engine) -> None:
 
     Examples
     --------
-    >>> engine = get_engine("sqlite:///:memory:")
+    >>> engine = get_engine("duckdb:///:memory:")
     >>> create_db_and_tables(engine)
     """
     SQLModel.metadata.create_all(engine)
@@ -76,7 +101,7 @@ def get_session(engine: Engine) -> Generator[Session, None, None]:
 
     Examples
     --------
-    >>> engine = get_engine("sqlite:///:memory:")
+    >>> engine = get_engine("duckdb:///:memory:")
     >>> with get_session(engine) as session:
     ...     # Perform database operations
     ...     pass  # Auto-committed

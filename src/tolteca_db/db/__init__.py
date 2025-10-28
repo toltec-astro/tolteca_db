@@ -10,9 +10,12 @@ __all__ = [
     "create_db_and_tables",
     "get_engine",
     "get_session",
+    "ParquetQuery",
+    "resolve_source_path",
 ]
 
 from .config import create_db_and_tables, get_engine, get_session
+from .parquet import ParquetQuery, resolve_source_path
 from .repository import (
     BaseRepository,
     DataProductFlagRepository,

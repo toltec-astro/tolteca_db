@@ -211,3 +211,5 @@ src/*/_version.py
 .cruft.json
 
 design/
+scratch/
+scripts/

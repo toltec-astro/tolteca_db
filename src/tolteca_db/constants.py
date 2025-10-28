@@ -5,13 +5,9 @@ from __future__ import annotations
 from enum import Enum, Flag, auto
 
 __all__ = [
-    "AssocType",
-    "BaseType",
     "DataProdAssocType",
     "DataProdType",
     "FlagSeverity",
-    "ProductKind",
-    "RAWAvailability",
     "ReducedStatus",
     "StorageRole",
     "TaskStatus",
@@ -19,42 +15,11 @@ __all__ = [
 ]
 
 
-class BaseType(str, Enum):
-    """Product base types."""
-
-    RAW_OBS = "raw_obs"
-    REDUCED_OBS = "reduced_obs"
-    INPUT_SET = "input_set"
-
-
-class ProductKind(str, Enum):
-    """Product kind discriminator for unified table."""
-
-    RAW = "RAW"
-    REDUCED = "REDUCED"
-
-
 class ReducedStatus(str, Enum):
     """Lifecycle status for REDUCED products."""
 
     ACTIVE = "ACTIVE"
     SUPERSEDED = "SUPERSEDED"
-
-
-class RAWAvailability(str, Enum):
-    """Physical availability state for RAW products."""
-
-    AVAILABLE = "AVAILABLE"
-    MISSING = "MISSING"
-    REMOTE = "REMOTE"
-    STAGED = "STAGED"
-
-
-class AssocType(str, Enum):
-    """Association edge types for provenance graph."""
-
-    PROCESS_EDGE = "process_edge"
-    GROUP_MEMBER = "group_member"
 
 
 class TaskStatus(str, Enum):

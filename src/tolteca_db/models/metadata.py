@@ -1,30 +1,89 @@
 """Typed metadata models for TolTEC data products.
 
-This module defines Pydantic models for the structured metadata stored in the
-DataProduct.meta JSON field. These provide type safety and validation for
-TolTEC-specific product metadata.
+This module defines dataclass-based metadata models for structured metadata
+stored in the DataProd.meta JSON field using adaptix's AdaptixJSON.
+These provide type safety and IDE autocomplete for TolTEC-specific metadata.
 
-Reference: ADR-009 in design/architecture.md
+Reference: ADR-009 in design/architecture.md, Phase 3 of adaptix integration
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from dataclasses import dataclass, field
+from typing import Any, Literal, TypeVar
+
+from adaptix import Retort
+from adaptix.integrations.sqlalchemy import AdaptixJSON
+from sqlalchemy.types import JSON
 
 from tolteca_db.constants import DataProdType
 
+# Global retort for adaptix conversions across all ORM models
+# Used by AdaptixJSON in data_prod.py and source.py
+# Centralized here to ensure consistent serialization behavior
+_retort = Retort()
+
+# Shared JSON type instance for DuckDB compatibility
+# DuckDB uses JSON (not JSONB), and AdaptixJSON requires a type instance (not class)
+_json_type = JSON()
+
+
+def adaptix_json_type(metadata_type) -> AdaptixJSON:
+    """
+    Create AdaptixJSON column type for DuckDB-compatible JSON storage.
+
+    Centralizes the configuration of AdaptixJSON to ensure:
+    - Single JSON() type instance shared across all uses
+    - DuckDB compatibility (uses JSON, not PostgreSQL's JSONB)
+    - Type-safe metadata serialization via adaptix
+
+    Parameters
+    ----------
+    metadata_type : type[T]
+        The metadata dataclass type (e.g., AnyDataProdMeta, ProcessContext)
+
+    Returns
+    -------
+    AdaptixJSON[T]
+        Configured AdaptixJSON type for SQLAlchemy mapped_column()
+
+    Examples
+    --------
+    >>> meta: Mapped[AnyDataProdMeta] = mapped_column(
+    ...     adaptix_json_type(AnyDataProdMeta),
+    ...     nullable=False,
+    ... )
+
+    Notes
+    -----
+    - Uses shared _json_type instance for memory efficiency
+    - impl=JSON() is required because AdaptixJSON defaults to JSONB for
+      PostgreSQL-derived dialects (duckdb-engine inherits from PostgreSQL)
+    - DuckDB only supports JSON type, not JSONB
+    """
+    return AdaptixJSON(_retort, metadata_type, impl=_json_type)
+
+
 __all__ = [
+    "_retort",
+    "_json_type",
+    "adaptix_json_type",
+    "AnyDataProdMeta",
     "CalGroupMeta",
     "DataProdMetaBase",
     "DrivefitMeta",
     "FocusGroupMeta",
+    "InterfaceFileMeta",
+    "MetadataType",
     "NamedGroupMeta",
+    "ProcessContext",
     "RawObsMeta",
     "ReducedObsMeta",
 ]
 
 
-class DataProdMetaBase(BaseModel):
+@dataclass
+class DataProdMetaBase:
     """Base metadata for all data products.
 
     Attributes
@@ -38,24 +97,16 @@ class DataProdMetaBase(BaseModel):
 
     Notes
     -----
-    Enhanced validation config for production-grade data integrity:
-    - validate_default: Validates default values (Pydantic 2.12+)
-    - validate_assignment: Re-validates when attributes change after creation
-    - extra: "forbid" rejects unknown fields (strict mode)
+    Using dataclasses with adaptix's AdaptixJSON for type-safe JSON storage.
+    No runtime validation overhead - type safety enforced by type checkers.
     """
-
-    model_config = {
-        "use_enum_values": True,
-        "validate_default": True,      # Pydantic 2.12+: Validate defaults
-        "validate_assignment": True,    # Re-validate on attribute changes
-        "extra": "forbid",              # Reject unknown fields (strict)
-    }
 
     name: str
     data_prod_type: DataProdType
     description: str | None = None
 
 
+@dataclass
 class RawObsMeta(DataProdMetaBase):
     """Metadata specific to dp_raw_obs.
 
@@ -79,16 +130,18 @@ class RawObsMeta(DataProdMetaBase):
         Target source name
     """
 
-    master: str
-    obsnum: int
-    subobsnum: int
-    scannum: int
-    data_kind: int  # ToltecDataKind flag value
+    tag: Literal["raw_obs"] = "raw_obs"  # Discriminator for union types
+    master: str = ""
+    obsnum: int = 0
+    subobsnum: int = 0
+    scannum: int = 0
+    data_kind: int = 0  # ToltecDataKind flag value
     nw_id: int | None = None
     obs_goal: str | None = None
     source_name: str | None = None
 
 
+@dataclass
 class ReducedObsMeta(DataProdMetaBase):
     """Metadata specific to dp_reduced_obs.
 
@@ -109,19 +162,25 @@ class ReducedObsMeta(DataProdMetaBase):
     processing_date : str | None
         ISO8601 processing timestamp
     quality_score : float | None
-        Quality metric (0-1 scale)
+        Quality metric (0-1 scale, validated at application layer)
+    \"\"\"
+
+    tag: Literal[\"reduced_obs\"] = \"reduced_obs\"  # Discriminator for union types
+    master: str = \"\"
+    obsnum: int = 0
     """
 
-    master: str
-    obsnum: int
-    subobsnum: int
-    scannum: int
+    master: str = ""
+    obsnum: int = 0
+    subobsnum: int = 0
+    scannum: int = 0
     reduction_method: str | None = None
     calibration_version: str | None = None
     processing_date: str | None = None
-    quality_score: float | None = Field(None, ge=0.0, le=1.0)
+    quality_score: float | None = None
 
 
+@dataclass
 class CalGroupMeta(DataProdMetaBase):
     """Metadata specific to dp_cal_group.
 
@@ -136,16 +195,18 @@ class CalGroupMeta(DataProdMetaBase):
     group_type : str | None
         Calibration group type
     date_range : tuple[str, str] | None
-        ISO8601 date range (start, end)
+        Start and end dates of calibration data
     """
 
-    master: str
-    obsnum: int
-    n_items: int
+    tag: Literal["cal_group"] = "cal_group"  # Discriminator for union types
+    master: str = ""
+    obsnum: int = 0
+    n_items: int = 0
     group_type: str | None = None
     date_range: tuple[str, str] | None = None
 
 
+@dataclass
 class DrivefitMeta(DataProdMetaBase):
     """Metadata specific to dp_drivefit.
 
@@ -162,17 +223,19 @@ class DrivefitMeta(DataProdMetaBase):
     convergence_status : str | None
         Fit convergence status
     chi_squared : float | None
-        Chi-squared goodness of fit
+        Chi-squared goodness of fit (non-negative, validated at application layer)
     """
 
-    master: str
-    obsnum: int
-    n_items: int
+    tag: Literal["drivefit"] = "drivefit"  # Discriminator for union types
+    master: str = ""
+    obsnum: int = 0
+    n_items: int = 0
     fit_method: str | None = None
     convergence_status: str | None = None
-    chi_squared: float | None = Field(None, ge=0.0)
+    chi_squared: float | None = None
 
 
+@dataclass
 class FocusGroupMeta(DataProdMetaBase):
     """Metadata specific to dp_focus_group.
 
@@ -192,14 +255,16 @@ class FocusGroupMeta(DataProdMetaBase):
         Metric used (FWHM, Strehl, etc.)
     """
 
-    master: str
-    obsnum: int
-    n_items: int
+    tag: Literal["focus_group"] = "focus_group"  # Discriminator for union types
+    master: str = ""
+    obsnum: int = 0
+    n_items: int = 0
     focus_positions: list[float] | None = None
     best_focus: float | None = None
     focus_metric: str | None = None
 
 
+@dataclass
 class NamedGroupMeta(DataProdMetaBase):
     """Metadata specific to dp_named_group.
 
@@ -217,8 +282,61 @@ class NamedGroupMeta(DataProdMetaBase):
         Free-form notes
     """
 
-    group_name: str
-    n_items: int
+    tag: Literal["named_group"] = "named_group"  # Discriminator for union types
+    group_name: str = ""
+    n_items: int = 0
     tags: list[str] | None = None
     owner: str | None = None
     notes: str | None = None
+
+
+@dataclass
+class InterfaceFileMeta:
+    """Metadata for interface files in DataProdSource.
+
+    Attributes
+    ----------
+    nw_id : int | None
+        Network ID (for roach files)
+    roach : int | None
+        Roach number
+    """
+
+    nw_id: int | None = None
+    roach: int | None = None
+
+
+@dataclass
+class ProcessContext:
+    """Process metadata for DataProdAssoc context field.
+
+    Attributes
+    ----------
+    module : str | None
+        Processing module name
+    version : str | None
+        Processing version
+    config : dict[str, Any] | None
+        Processing configuration
+    """
+
+    module: str | None = None
+    version: str | None = None
+    config: dict[str, Any] | None = None
+
+
+# Union type for DataProd.meta (polymorphic metadata with Literal discriminators)
+
+
+# Union type for DataProd.meta (polymorphic metadata with Literal discriminators)
+AnyDataProdMeta = (
+    RawObsMeta
+    | ReducedObsMeta
+    | CalGroupMeta
+    | DrivefitMeta
+    | FocusGroupMeta
+    | NamedGroupMeta
+)
+
+# Union type for all metadata (includes InterfaceFileMeta and dict fallback)
+MetadataType = AnyDataProdMeta | InterfaceFileMeta | dict[str, Any]

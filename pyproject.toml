@@ -23,6 +23,12 @@ dependencies = [
   "blake3>=1.0.8",
   "alembic>=1.14.0",
   "pydantic>=2.12.0",
+  "adaptix>=3.0.0b11",
+  "duckdb>=1.0.0",
+  "duckdb-engine>=0.13.0",
+  "pyarrow>=18.0.0",
+  "pandas>=2.0.0",
+  "loguru>=0.7.0",
 ]
 
 [project.optional-dependencies]
@@ -98,6 +104,8 @@ xfail_strict = true
 filterwarnings = [
   # Treat all warnings as errors for strict testing
   "error",
+  # Temporarily allow SQLAlchemy deprecation warnings (auto-table-comments feature needs update)
+  "ignore::sqlalchemy.exc.SADeprecationWarning",
 ]
 
 [tool.ty]
