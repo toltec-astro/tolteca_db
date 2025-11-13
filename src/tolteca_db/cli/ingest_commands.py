@@ -9,6 +9,9 @@ import typer
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
+from sqlalchemy.orm import Session
+
+from tolteca_db.ingest import guess_info_from_file
 
 console = Console()
 
@@ -424,7 +427,7 @@ def ingest_from_toltec_db(
     # Actual ingestion
     engine = get_engine(target_url)
     
-    with get_session(target_url) as session:
+    with Session(engine) as session:
         # Ensure location exists with correct root_uri
         stmt = select(Location).where(Location.label == location)
         loc = session.scalar(stmt)
@@ -464,6 +467,7 @@ def ingest_from_toltec_db(
         ingested = 0
         skipped = 0
         failed = 0
+        missing = 0
         
         with Progress() as progress:
             task = progress.add_task("[cyan]Ingesting files...", total=len(rows))
@@ -471,30 +475,33 @@ def ingest_from_toltec_db(
             for row in rows:
                 # Construct file path
                 filename = row['FileName']
-                if filename.startswith('/'):
-                    file_path = Path(filename)
-                else:
-                    file_path = data_root / filename
+                # Strip /data_lmt prefix if present and make relative to data_root
+                if filename.startswith('/data_lmt/'):
+                    filename = filename[len('/data_lmt/'):]
+                elif filename.startswith('/data_lmt'):
+                    filename = filename[len('/data_lmt'):].lstrip('/')
                 
-                # Check if file exists
-                if not file_path.exists():
-                    failed += 1
-                    progress.update(task, advance=1)
-                    continue
+                file_path = data_root / filename
                 
                 try:
-                    # Check if already ingested
-                    if skip_existing and ingestor._file_exists(file_path):
-                        skipped += 1
+                    # Parse file info from filename
+                    file_info = guess_info_from_file(file_path)
+                    if file_info is None:
+                        console.print(f"[yellow]Warning:[/yellow] Could not parse filename: {file_path.name}")
+                        failed += 1
                         progress.update(task, advance=1)
                         continue
                     
-                    # Ingest file
-                    ingestor.ingest_file(file_path)
-                    ingested += 1
+                    # Ingest file (logical entry created even if file missing)
+                    ingestor.ingest_file(file_info)
+                    
+                    if file_path.exists():
+                        ingested += 1
+                    else:
+                        missing += 1
                     
                     # Commit periodically
-                    if ingested % 100 == 0:
+                    if (ingested + missing) % 100 == 0:
                         session.commit()
                     
                 except Exception as e:
@@ -509,6 +516,7 @@ def ingest_from_toltec_db(
         # Summary
         console.print(f"\n[green]✓[/green] Ingestion complete:")
         console.print(f"  Ingested: {ingested}")
+        console.print(f"  Logical (missing files): {missing}")
         console.print(f"  Skipped (existing): {skipped}")
         console.print(f"  Failed: {failed}")
         

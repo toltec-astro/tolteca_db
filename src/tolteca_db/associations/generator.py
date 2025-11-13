@@ -528,14 +528,20 @@ class AssociationGenerator:
         parts = [collator.data_prod_type]
         
         # Add identifying fields based on group type
+        # Handle both dict and dataclass metadata
         if isinstance(collator, CalGroupCollator):
-            parts.append(str(meta.get("obsnum", "")))
-            parts.append(str(meta.get("master", "")))
+            obsnum = meta.get("obsnum", "") if isinstance(meta, dict) else getattr(meta, "obsnum", "")
+            master = meta.get("master", "") if isinstance(meta, dict) else getattr(meta, "master", "")
+            parts.append(str(obsnum))
+            parts.append(str(master))
         elif isinstance(collator, DriveFitCollator):
-            parts.append(str(meta.get("obsnum", "")))
-            parts.append(str(meta.get("master", "")))
+            obsnum = meta.get("obsnum", "") if isinstance(meta, dict) else getattr(meta, "obsnum", "")
+            master = meta.get("master", "") if isinstance(meta, dict) else getattr(meta, "master", "")
+            parts.append(str(obsnum))
+            parts.append(str(master))
         elif isinstance(collator, FocusGroupCollator):
-            parts.append(str(meta.get("obsnum", "")))
+            obsnum = meta.get("obsnum", "") if isinstance(meta, dict) else getattr(meta, "obsnum", "")
+            parts.append(str(obsnum))
         
         return "_".join(parts)
 

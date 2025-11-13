@@ -63,29 +63,51 @@ class ObservationPool:
         rows = []
         for obs in self._observations:
             # Extract metadata - handle both DataProd objects and dicts
-            if hasattr(obs, "metadata"):
+            # Note: DataProd uses 'meta' not 'metadata'
+            if hasattr(obs, "meta"):
+                metadata = obs.meta
+                pk = obs.pk
+            elif hasattr(obs, "metadata"):
                 metadata = obs.metadata
                 pk = obs.pk
             else:
-                metadata = obs.get("metadata", {})
+                metadata = obs.get("metadata", {}) or obs.get("meta", {})
                 pk = obs.get("pk")
 
             # Extract data_kind from metadata union
             data_kind = self._extract_data_kind(metadata)
 
-            rows.append(
-                {
-                    "pk": pk,
-                    "obsnum": metadata.get("obsnum") if metadata else None,
-                    "subobsnum": metadata.get("subobsnum") if metadata else None,
-                    "scannum": metadata.get("scannum") if metadata else None,
-                    "master": metadata.get("master") if metadata else None,
-                    "roachid": metadata.get("roachid") if metadata else None,
-                    "data_kind": data_kind,
-                    "obs_goal": metadata.get("obs_goal") if metadata else None,
-                    "interface": metadata.get("interface") if metadata else None,
-                }
-            )
+            # Extract fields - handle both dict and dataclass metadata
+            if isinstance(metadata, dict):
+                # Dict-style access
+                rows.append(
+                    {
+                        "pk": pk,
+                        "obsnum": metadata.get("obsnum"),
+                        "subobsnum": metadata.get("subobsnum"),
+                        "scannum": metadata.get("scannum"),
+                        "master": metadata.get("master"),
+                        "roachid": metadata.get("roachid"),
+                        "data_kind": data_kind,
+                        "obs_goal": metadata.get("obs_goal"),
+                        "interface": metadata.get("interface"),
+                    }
+                )
+            else:
+                # Dataclass-style access (for AdaptixJSON)
+                rows.append(
+                    {
+                        "pk": pk,
+                        "obsnum": getattr(metadata, "obsnum", None),
+                        "subobsnum": getattr(metadata, "subobsnum", None),
+                        "scannum": getattr(metadata, "scannum", None),
+                        "master": getattr(metadata, "master", None),
+                        "roachid": getattr(metadata, "roachid", None),
+                        "data_kind": data_kind,
+                        "obs_goal": getattr(metadata, "obs_goal", None),
+                        "interface": getattr(metadata, "interface", None),
+                    }
+                )
 
         self.data = pd.DataFrame(rows)
 

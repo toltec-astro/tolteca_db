@@ -213,3 +213,4 @@ src/*/_version.py
 design/
 scratch/
 scripts/
+.tmp_*/

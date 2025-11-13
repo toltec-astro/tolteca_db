@@ -163,13 +163,9 @@ class ReducedObsMeta(DataProdMetaBase):
         ISO8601 processing timestamp
     quality_score : float | None
         Quality metric (0-1 scale, validated at application layer)
-    \"\"\"
-
-    tag: Literal[\"reduced_obs\"] = \"reduced_obs\"  # Discriminator for union types
-    master: str = \"\"
-    obsnum: int = 0
     """
 
+    tag: Literal["reduced_obs"] = "reduced_obs"  # Discriminator for union types
     master: str = ""
     obsnum: int = 0
     subobsnum: int = 0

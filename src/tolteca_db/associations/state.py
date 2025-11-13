@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tolteca_db.models.orm import DataProd, DataProdAssoc
@@ -60,8 +61,8 @@ class DatabaseBackend(StateBackend):
 
     def load_grouped_observations(self) -> set[int]:
         """Query database for all observations that have associations."""
-        grouped = (
-            self.session.query(DataProdAssoc.dst_data_prod_fk).distinct().scalars()
+        grouped = self.session.scalars(
+            select(DataProdAssoc.dst_data_prod_fk).distinct()
         )
         return set(grouped)
 
@@ -70,21 +71,23 @@ class DatabaseBackend(StateBackend):
         index = {}
 
         # Query all group type DataProds (types > 1 are groups)
-        groups = self.session.query(DataProd).filter(DataProd.type_fk > 1).all()
+        groups = self.session.scalars(
+            select(DataProd).where(DataProd.data_prod_type_fk > 1)
+        ).all()
 
         for group in groups:
             # Extract candidate key from metadata
             candidate_key = self._extract_candidate_key(group)
             if candidate_key:
                 # Get member count
-                n_members = (
-                    self.session.query(DataProdAssoc)
-                    .filter(DataProdAssoc.src_data_prod_fk == group.pk)
-                    .count()
+                n_members = self.session.scalar(
+                    select(func.count())
+                    .select_from(DataProdAssoc)
+                    .where(DataProdAssoc.src_data_prod_fk == group.pk)
                 )
 
                 # Get group type label
-                group_type = self._get_group_type_label(group.type_fk)
+                group_type = self._get_group_type_label(group.data_prod_type_fk)
 
                 # Store group info
                 info = GroupInfo(
@@ -117,13 +120,13 @@ class DatabaseBackend(StateBackend):
         if obsnum is None or master is None:
             return None
 
-        # Determine group type from type_fk
-        group_type = self._get_group_type_label(group.type_fk)
+        # Determine group type from data_prod_type_fk
+        group_type = self._get_group_type_label(group.data_prod_type_fk)
 
         return f"{group_type}_{obsnum}_{master}"
 
-    def _get_group_type_label(self, type_fk: int) -> str:
-        """Map type_fk to group type label."""
+    def _get_group_type_label(self, data_prod_type_fk: int) -> str:
+        """Map data_prod_type_fk to group type label."""
         # This mapping should match your DataProdType enum
         # TODO: Query from database or use enum
         type_map = {
@@ -132,7 +135,7 @@ class DatabaseBackend(StateBackend):
             3: "drivefit",
             4: "focus",
         }
-        return type_map.get(type_fk, f"type_{type_fk}")
+        return type_map.get(data_prod_type_fk, f"type_{data_prod_type_fk}")
 
     def _serialize_metadata(self, metadata: Any) -> dict[str, Any]:
         """Convert metadata to dict for JSON serialization."""

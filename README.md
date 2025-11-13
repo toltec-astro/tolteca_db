@@ -102,10 +102,30 @@ tolteca_db query stats
 
 ## Documentation
 
+### Core Design Documents
+
+All comprehensive documentation is consolidated in the `design/` folder:
+
+- **[Architecture](design/architecture.md)** - Complete system design, Database API, performance optimizations
+- **[Implementation Guide](design/implementation.md)** - Development phases, migration history, status tracking
+- **[Tasks](design/tasks.md)** - Task tracking, completed work, phase history
 - **[CLI User Guide](design/CLI_User_Guide.md)** - Complete command reference with examples
-- **[Architecture](design/architecture.md)** - System design and patterns
-- **[Implementation Guide](design/implementation.md)** - Development phases and status
 - **[Incremental Associations](design/Incremental_Associations_Implementation.md)** - Performance optimization details
+
+### Additional Documentation
+
+- **[Technology Stack](design/Technology_Stack_Blueprint.md)** - Technology decisions and rationale
+- **[Database Schema](design/database_schema_diagram.md)** - ERD and table relationships
+- **[Exemplars](design/exemplars.md)** - Code examples and patterns
+- **[Gap Analysis](design/gap_analysis.md)** - Feature coverage and future work
+
+### Archived Documentation
+
+Historical documentation is preserved in `design/_archive/` for reference but should not be used for current information:
+
+- API_MIGRATION.md, DAGSTER_MIGRATION_SUMMARY.md, DATABASE.md, QUICK_REFERENCE.md (now consolidated into architecture.md and implementation.md)
+
+**Note:** All design and implementation documentation is maintained as living documents in the `design/` folder. Always check there first for current information.
 
 ---
 
@@ -123,10 +143,10 @@ tolteca_db query stats
 
 ### Performance
 
-| Operation | Traditional | Incremental | Speedup |
-|-----------|------------|-------------|---------|
-| 1000 obs + 10 new | ~10s | ~0.01s | **1000×** |
-| 10K obs + 100 new | ~5min | ~0.1s | **3000×** |
+| Operation         | Traditional | Incremental | Speedup   |
+| ----------------- | ----------- | ----------- | --------- |
+| 1000 obs + 10 new | ~10s        | ~0.01s      | **1000×** |
+| 10K obs + 100 new | ~5min       | ~0.1s       | **3000×** |
 
 ### Technology Stack
 

@@ -200,6 +200,9 @@ class DataIngestor:
             if existing is not None:
                 return None, None
         
+        # Check if file exists
+        file_exists = file_info.filepath.exists()
+        
         # Get or create raw observation DataProd
         data_prod = self._get_or_create_raw_obs(
             file_info,
@@ -208,7 +211,7 @@ class DataIngestor:
         )
         
         # Create DataProdSource
-        source = self._create_source(file_info, data_prod.pk, source_uri)
+        source = self._create_source(file_info, data_prod.pk, source_uri, file_exists=file_exists)
         
         return data_prod, source
     
@@ -334,11 +337,35 @@ class DataIngestor:
         file_info: ParsedFileInfo,
         data_prod_pk: str,
         source_uri: str,
+        file_exists: bool = True,
     ) -> DataProdSource:
-        """Create DataProdSource entry."""
-        # Calculate file metadata
-        file_size = file_info.filepath.stat().st_size
-        checksum = _compute_file_hash(file_info.filepath)
+        """Create DataProdSource entry.
+        
+        Parameters
+        ----------
+        file_info : ParsedFileInfo
+            Parsed file information
+        data_prod_pk : str
+            Data product primary key
+        source_uri : str
+            Source URI for the file
+        file_exists : bool, optional
+            Whether the physical file exists, by default True
+        
+        Returns
+        -------
+        DataProdSource
+            Created source entry
+        """
+        # Calculate file metadata if file exists
+        if file_exists:
+            file_size = file_info.filepath.stat().st_size
+            checksum = _compute_file_hash(file_info.filepath)
+            availability_state = "available"
+        else:
+            file_size = None
+            checksum = None
+            availability_state = "missing"
         
         # Create InterfaceFileMeta
         interface_meta = InterfaceFileMeta(
@@ -353,6 +380,7 @@ class DataIngestor:
             data_prod_fk=data_prod_pk,
             checksum=checksum,
             size=file_size,
+            availability_state=availability_state,
             meta=interface_meta,
         )
         

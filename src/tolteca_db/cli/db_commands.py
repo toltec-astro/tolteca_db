@@ -35,18 +35,49 @@ def init_database(
     Creates all tables and optionally populates registry tables
     (DataProdType, DataKind, Flag definitions).
     """
-    from tolteca_db.db import get_engine, setup_database
+    from sqlalchemy.orm import Session
+    from tolteca_db.db import get_engine, create_db_and_tables
+    from tolteca_db.models.orm import DataProdType, DataKind, DataProdAssocType
+    from tolteca_db.constants import (
+        DataProdType as DataProdTypeConst,
+        DataProdAssocType as DataProdAssocTypeConst,
+        ToltecDataKind,
+    )
     
     console.print("[bold blue]Initializing database...[/bold blue]")
     
     engine = get_engine(db_url)
     console.print(f"Database: {engine.url}")
     
-    setup_database(engine, populate_registry=create_registry)
+    # Create tables
+    create_db_and_tables(engine)
+    console.print("[green]✓[/green] Tables created")
+    
+    # Populate registry if requested
+    if create_registry:
+        with Session(engine) as session:
+            # Populate DataProdType
+            for type_const in DataProdTypeConst:
+                if not session.query(DataProdType).filter(DataProdType.label == type_const.value).first():
+                    session.add(DataProdType(label=type_const.value))
+            
+            # Populate DataProdAssocType
+            for assoc_const in DataProdAssocTypeConst:
+                if not session.query(DataProdAssocType).filter(DataProdAssocType.label == assoc_const.value).first():
+                    session.add(DataProdAssocType(label=assoc_const.value))
+            
+            # Populate DataKind (ToltecDataKind flags)
+            for kind in ToltecDataKind:
+                if kind.name != "RawSweep":  # Skip composite flag
+                    if not session.query(DataKind).filter(DataKind.label == kind.name).first():
+                        # Determine category based on kind
+                        category = "calibration" if kind.name in ("VnaSweep", "TargetSweep", "Tune") else "measurement"
+                        session.add(DataKind(label=kind.name, category=category))
+            
+            session.commit()
+            console.print("[green]✓[/green] Registry tables populated")
     
     console.print("[green]✓[/green] Database initialized successfully")
-    if create_registry:
-        console.print("  - Registry tables populated")
 
 
 @db_app.command(name="info")
