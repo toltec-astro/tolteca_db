@@ -32,16 +32,12 @@ dependencies = [
   "dagster>=1.5.0",
   "dagster-webserver>=1.5.0",
   "tenacity>=8.0.0",
+  "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]
 
-dash = [
-  "dash>=2.14.0",
-  "dash-mantine-components>=0.12.0",
-  "plotly>=5.18.0",
-  "dash_component_template>=5.0.0",
-]
+dash = ["dash>=2.14.0", "dash-mantine-components>=0.12.0", "plotly>=5.18.0"]
 
 test = [
   "pytest>=8.0",

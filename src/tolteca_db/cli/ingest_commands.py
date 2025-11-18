@@ -492,6 +492,19 @@ def ingest_from_toltec_db(
                         progress.update(task, advance=1)
                         continue
                     
+                    # Get observation datetime from toltec_db Date and Time columns
+                    obs_datetime = None
+                    if row['Date'] and row['Time']:
+                        from datetime import datetime
+                        try:
+                            # Combine Date (YYYY-MM-DD) and Time (HH:MM:SS)
+                            obs_datetime = datetime.fromisoformat(f"{row['Date']} {row['Time']}")
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # Override file_info.obs_datetime with toltec_db value
+                    file_info.obs_datetime = obs_datetime
+                    
                     # Ingest file (logical entry created even if file missing)
                     ingestor.ingest_file(file_info)
                     

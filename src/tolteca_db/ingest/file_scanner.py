@@ -42,6 +42,8 @@ class ParsedFileInfo:
         File extension (.nc, .fits, etc.)
     data_kind : ToltecDataKind | None
         Inferred data kind from suffix
+    obs_datetime : datetime | None
+        Observation datetime (set from toltec_db Date/Time columns)
     """
     
     filepath: Path
@@ -53,6 +55,7 @@ class ParsedFileInfo:
     file_suffix: str | None
     file_ext: str
     data_kind: ToltecDataKind | None
+    obs_datetime: datetime | None = None
 
 
 # TolTEC filename patterns
@@ -68,7 +71,7 @@ TOLTEC_FILENAME_PATTERN = re.compile(
     r"_(?P<obsnum>\d+)"
     r"_(?P<subobsnum>\d+)"
     r"_(?P<scannum>\d+)"
-    r"(?:_\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2})?"  # Optional timestamp
+    r"(?:_(?P<year>\d{4})_(?P<month>\d{2})_(?P<day>\d{2})_(?P<hour>\d{2})_(?P<minute>\d{2})_(?P<second>\d{2}))?"  # Optional timestamp
     r"(?:_(?P<suffix>\w+))?"
     r"\.(?P<ext>\w+)$"
 )
@@ -142,6 +145,7 @@ def guess_info_from_file(filepath: str | Path) -> ParsedFileInfo | None:
         file_suffix=file_suffix,
         file_ext=file_ext,
         data_kind=data_kind,
+        obs_datetime=None,
     )
 
 

@@ -59,8 +59,9 @@ class ToltecaDBResource(ConfigurableResource):
 
             # Use SQLite for metadata (WAL mode for concurrent writes)
             # DuckDB will be used internally for Parquet queries
-            test_db_path = Path(".dagster/test_tolteca.sqlite")
-            return f"sqlite:///{test_db_path}"
+            dagster_home = Path(os.getenv("DAGSTER_HOME", ".dagster"))
+            test_db_path = dagster_home / "test_tolteca.sqlite"
+            return f"sqlite:///{test_db_path.absolute()}"
         return self.database_url
 
     def setup_for_execution(self, context) -> None:
@@ -82,10 +83,11 @@ class ToltecaDBResource(ConfigurableResource):
 
         # In test mode, use file lock to ensure only one process initializes database
         if os.getenv("DAGSTER_TEST_MODE") == "1":
-            test_db_path = Path(".dagster/test_tolteca.sqlite")
+            dagster_home = Path(os.getenv("DAGSTER_HOME", ".dagster"))
+            test_db_path = dagster_home / "test_tolteca.sqlite"
             test_db_path.parent.mkdir(parents=True, exist_ok=True)
-            lock_file_path = Path(".dagster/test_tolteca.lock")
-            init_marker_path = Path(".dagster/test_tolteca.initialized")
+            lock_file_path = dagster_home / "test_tolteca.lock"
+            init_marker_path = dagster_home / "test_tolteca.initialized"
 
             # Check if database is already initialized
             if test_db_path.exists() and init_marker_path.exists():

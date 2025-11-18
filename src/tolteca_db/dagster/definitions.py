@@ -202,6 +202,8 @@ def get_test_definitions(
 # Default definitions (test mode with simulator for development)
 # Override by creating a workspace.yaml with production config
 defs = get_test_definitions(
-    source_db_url="sqlite:///../run/toltecdb_last_30days.sqlite",
-    integration_time_seconds=15.0,
+    source_db_url=EnvVar("TOLTEC_DB_SOURCE_URL").get_value(
+        "sqlite:///../run/toltecdb_last_30days.sqlite"
+    ),
+    integration_time_seconds=float(EnvVar("TOLTECA_SIMULATOR_INTEGRATION_TIME").get_value("15.0")),
 )

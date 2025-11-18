@@ -315,6 +315,7 @@ class DataIngestor:
             nw_id=self.nw_id,
             obs_goal=obs_goal,
             source_name=source_name,
+            obs_datetime=file_info.obs_datetime,
         )
         
         # Create DataProd (pk is auto-generated)

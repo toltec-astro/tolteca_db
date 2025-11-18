@@ -10,6 +10,7 @@ Reference: ADR-009 in design/architecture.md, Phase 3 of adaptix integration
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Literal, TypeVar
 
 from adaptix import Retort
@@ -128,6 +129,8 @@ class RawObsMeta(DataProdMetaBase):
         Observation goal/purpose
     source_name : str | None
         Target source name
+    obs_datetime : datetime | None
+        Observation timestamp (UTC)
     """
 
     tag: Literal["raw_obs"] = "raw_obs"  # Discriminator for union types
@@ -139,6 +142,7 @@ class RawObsMeta(DataProdMetaBase):
     nw_id: int | None = None
     obs_goal: str | None = None
     source_name: str | None = None
+    obs_datetime: datetime | None = None
 
 
 @dataclass

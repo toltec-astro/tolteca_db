@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Generic, TypeVar
 
-from sqlalchemy.orm import selectinload
-from sqlmodel import Session, select
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
 
 if TYPE_CHECKING:
     from typing import Any
 
-    from sqlmodel import SQLModel
+    from sqlalchemy.orm import DeclarativeBase as SQLModel
 
 __all__ = [
     "BaseRepository",
@@ -82,7 +82,7 @@ class BaseRepository(Generic[T]):
         stmt = select(self.model_class)
         for key, value in filters.items():
             stmt = stmt.where(getattr(self.model_class, key) == value)
-        return list(self.session.exec(stmt).all())
+        return list(self.session.execute(stmt).scalars().all())
 
     def create(self, obj: T) -> T:
         """
@@ -169,7 +169,7 @@ class DataProductRepository(BaseRepository):
             self.model_class.base_type == base_type,
             self.model_class.name == name,
         )
-        return self.session.exec(stmt).first()
+        return self.session.execute(stmt).scalars().first()
 
     def list_raw_usable(self, base_type: str | None = None) -> list[Any]:
         """
@@ -216,7 +216,7 @@ class DataProductRepository(BaseRepository):
         )
         stmt = stmt.where(~self.model_class.product_pk.in_(blocking_flags_subquery))
 
-        return list(self.session.exec(stmt).all())
+        return list(self.session.execute(stmt).scalars().all())
 
     def supersede_reduced(self, product_pk: str) -> Any:
         """
@@ -271,7 +271,7 @@ class DataProductRepository(BaseRepository):
         if base_type:
             stmt = stmt.where(self.model_class.base_type == base_type)
 
-        return list(self.session.exec(stmt).all())
+        return list(self.session.execute(stmt).scalars().all())
 
     def get_with_storage(self, id_value: Any) -> Any:
         """
@@ -300,7 +300,7 @@ class DataProductRepository(BaseRepository):
             .where(self.model_class.product_pk == id_value)
             .options(selectinload(self.model_class.storage_locations))
         )
-        return self.session.exec(stmt).first()
+        return self.session.execute(stmt).scalars().first()
 
     def get_with_flags(self, id_value: Any) -> Any:
         """
@@ -323,7 +323,7 @@ class DataProductRepository(BaseRepository):
             .where(self.model_class.product_pk == id_value)
             .options(selectinload(self.model_class.flags))
         )
-        return self.session.exec(stmt).first()
+        return self.session.execute(stmt).scalars().first()
 
     def get_with_all_relations(self, id_value: Any) -> Any:
         """
@@ -354,7 +354,7 @@ class DataProductRepository(BaseRepository):
                 selectinload(self.model_class.flags),
             )
         )
-        return self.session.exec(stmt).first()
+        return self.session.execute(stmt).scalars().first()
 
     def list_with_storage(
         self,
@@ -395,7 +395,7 @@ class DataProductRepository(BaseRepository):
         if limit:
             stmt = stmt.limit(limit)
 
-        return list(self.session.exec(stmt).all())
+        return list(self.session.execute(stmt).scalars().all())
 
 
 class FlagDefinitionRepository(BaseRepository):
@@ -420,7 +420,7 @@ class FlagDefinitionRepository(BaseRepository):
             Flag definition or None if not found
         """
         stmt = select(self.model_class).where(self.model_class.flag_key == flag_key)
-        return self.session.exec(stmt).first()
+        return self.session.execute(stmt).scalars().first()
 
     def list_by_severity(self, severity: str) -> list[Any]:
         """
@@ -437,7 +437,7 @@ class FlagDefinitionRepository(BaseRepository):
             Flag definitions matching severity
         """
         stmt = select(self.model_class).where(self.model_class.severity == severity)
-        return list(self.session.exec(stmt).all())
+        return list(self.session.execute(stmt).scalars().all())
 
     def create_from_schema(self, schema: Any) -> Any:
         """
@@ -485,7 +485,7 @@ class DataProductFlagRepository(BaseRepository):
         stmt = select(self.model_class).where(
             self.model_class.product_fk == product_fk
         )
-        return list(self.session.exec(stmt).all())
+        return list(self.session.execute(stmt).scalars().all())
 
     def list_by_severity(self, product_fk: str, severity: str) -> list[Any]:
         """
@@ -513,7 +513,7 @@ class DataProductFlagRepository(BaseRepository):
                 FlagDefinition.severity == severity,
             )
         )
-        return list(self.session.exec(stmt).all())
+        return list(self.session.execute(stmt).scalars().all())
 
     def create_from_schema(self, schema: Any) -> Any:
         """
