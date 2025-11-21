@@ -7,7 +7,7 @@ from typing import Annotated, Optional
 
 import typer
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from rich.table import Table
 from sqlalchemy.orm import Session
 
@@ -147,12 +147,19 @@ def ingest_directory(
         int,
         typer.Option("--commit-interval", help="Commit every N files"),
     ] = 100,
+    with_associations: Annotated[
+        bool,
+        typer.Option("--with-associations", help="Generate associations after ingestion"),
+    ] = False,
 ) -> None:
     """
     Ingest all TolTEC files in a directory.
     
     Scans directory recursively, parses filenames, and creates
     database entries for all matching files.
+    
+    Use --with-associations to automatically generate associations
+    (CalGroup, DriveFit, FocusGroup) after ingestion completes.
     """
     from tolteca_db.db import get_engine
     from sqlalchemy.orm import Session
@@ -210,6 +217,10 @@ def ingest_directory(
     
     if stats.files_failed > 0:
         console.print("[yellow]Warning:[/yellow] Some files failed to ingest")
+    
+    # Generate associations if requested
+    if with_associations:
+        _generate_associations_after_ingest(engine, stats.data_prods_created)
 
 
 @ingest_app.command(name="scan")
@@ -320,6 +331,10 @@ def ingest_from_toltec_db(
         bool,
         typer.Option("--create-location/--no-create-location", help="Create location if it doesn't exist"),
     ] = True,
+    with_associations: Annotated[
+        bool,
+        typer.Option("--with-associations", help="Generate associations after ingestion"),
+    ] = False,
 ) -> None:
     """
     Ingest files from toltec_db (real-time acquisition database).
@@ -332,6 +347,9 @@ def ingest_from_toltec_db(
     The --location-root (defaults to --data-root) specifies the root path 
     that will be stored in the Location.root_uri for computing relative paths.
     
+    Use --with-associations to automatically generate associations
+    (CalGroup, DriveFit, FocusGroup) after ingestion completes.
+    
     Examples:
         # Ingest all files from toltec_db
         tolteca_db ingest from-toltec-db run/toltecdb_last_30days.sql \\
@@ -340,6 +358,10 @@ def ingest_from_toltec_db(
         # Dry-run to preview
         tolteca_db ingest from-toltec-db run/toltecdb_last_30days.sql \\
             --data-root /data_lmt/toltec/tcs --dry-run
+        
+        # With automatic association generation
+        tolteca_db ingest from-toltec-db run/toltecdb_last_30days.sql \\
+            --data-root /data_lmt/toltec/tcs --with-associations
         
         # Different location root for relative paths
         tolteca_db ingest from-toltec-db run/toltecdb_last_30days.sql \\
@@ -534,3 +556,77 @@ def ingest_from_toltec_db(
         console.print(f"  Failed: {failed}")
         
     toltec_conn.close()
+    
+    # Generate associations if requested
+    if with_associations and not dry_run:
+        _generate_associations_after_ingest(engine, ingested + missing)
+
+
+def _generate_associations_after_ingest(engine, n_ingested: int) -> None:
+    """
+    Helper to generate associations after ingestion.
+    
+    Parameters
+    ----------
+    engine : Engine
+        SQLAlchemy engine
+    n_ingested : int
+        Number of data products ingested (for context)
+    """
+    from sqlalchemy.orm import Session
+    from tolteca_db.associations import (
+        AssociationGenerator,
+        AssociationState,
+        DatabaseBackend,
+    )
+    
+    console.print("\n[bold blue]Generating associations...[/bold blue]")
+    console.print("Mode: Incremental")
+    console.print("State backend: database")
+    
+    with Session(engine) as session:
+        # Setup state for incremental processing (matching assoc generate behavior)
+        state = AssociationState(DatabaseBackend(session))
+        console.print("Using database state backend")
+        
+        # Create generator with state
+        generator = AssociationGenerator(session, state=state)
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Processing...", total=None)
+            
+            # Generate associations for all raw observations
+            stats = generator.generate_associations(
+                n_observations=None,  # Process all
+                incremental=True,
+                commit=False,
+            )
+            
+            progress.update(task, completed=True)
+        
+        session.commit()
+        console.print("[green]✓[/green] Changes committed")
+    
+    # Display association statistics (matching assoc generate output format)
+    table = Table(title="Association Statistics")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Count", style="magenta", justify="right")
+    
+    table.add_row("Observations Scanned", str(stats.observations_scanned))
+    table.add_row("Already Grouped", str(stats.observations_already_grouped))
+    table.add_row("Observations Processed", str(stats.observations_processed))
+    table.add_row("Groups Created", str(stats.groups_created))
+    table.add_row("Groups Updated", str(stats.groups_updated))
+    table.add_row("Associations Created", str(stats.associations_created))
+    
+    console.print(table)
+    
+    # Performance note (matching assoc generate behavior)
+    if stats.observations_already_grouped > 0:
+        skip_pct = (stats.observations_already_grouped / stats.observations_scanned) * 100
+        console.print(f"\n[green]Performance:[/green] Skipped {skip_pct:.1f}% of observations (already grouped)")

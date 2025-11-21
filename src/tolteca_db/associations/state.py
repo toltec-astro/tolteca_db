@@ -36,16 +36,28 @@ class GroupInfo:
 class StateBackend:
     """Base class for state persistence backends."""
 
-    def load_grouped_observations(self) -> set[int]:
-        """Load set of observation PKs that are already grouped."""
+    def load_grouped_observations(self) -> dict[int, set[int]]:
+        """Load observations grouped by association type.
+        
+        Returns
+        -------
+        dict[int, set[int]]
+            Mapping from data_prod_assoc_type_fk to set of observation PKs
+        """
         raise NotImplementedError
 
     def load_group_index(self) -> dict[str, GroupInfo]:
         """Load index of existing groups: {candidate_key: GroupInfo}."""
         raise NotImplementedError
 
-    def save_grouped_observations(self, grouped_obs: set[int]) -> None:
-        """Save updated set of grouped observations."""
+    def save_grouped_observations(self, grouped_obs: dict[int, set[int]]) -> None:
+        """Save observations grouped by association type.
+        
+        Parameters
+        ----------
+        grouped_obs : dict[int, set[int]]
+            Mapping from data_prod_assoc_type_fk to set of observation PKs
+        """
         raise NotImplementedError
 
     def save_group_index(self, group_index: dict[str, GroupInfo]) -> None:
@@ -59,12 +71,27 @@ class DatabaseBackend(StateBackend):
     def __init__(self, session: Session):
         self.session = session
 
-    def load_grouped_observations(self) -> set[int]:
-        """Query database for all observations that have associations."""
-        grouped = self.session.scalars(
-            select(DataProdAssoc.dst_data_prod_fk).distinct()
+    def load_grouped_observations(self) -> dict[int, set[int]]:
+        """Query database for observations grouped by association type.
+        
+        Returns
+        -------
+        dict[int, set[int]]
+            Mapping from data_prod_assoc_type_fk to set of observation PKs
+        """
+        from sqlalchemy import select
+        
+        stmt = select(
+            DataProdAssoc.data_prod_assoc_type_fk,
+            DataProdAssoc.dst_data_prod_fk
         )
-        return set(grouped)
+        results = self.session.execute(stmt).all()
+        
+        grouped_by_type = defaultdict(set)
+        for assoc_type_fk, obs_pk in results:
+            grouped_by_type[assoc_type_fk].add(obs_pk)
+        
+        return dict(grouped_by_type)
 
     def load_group_index(self) -> dict[str, GroupInfo]:
         """Build index from existing group DataProds."""
@@ -167,14 +194,21 @@ class FilesystemBackend(StateBackend):
         self.grouped_obs_file = self.state_dir / "grouped_observations.json"
         self.group_index_file = self.state_dir / "group_index.json"
 
-    def load_grouped_observations(self) -> set[int]:
-        """Load grouped observations from JSON file."""
+    def load_grouped_observations(self) -> dict[int, set[int]]:
+        """Load grouped observations from JSON file.
+        
+        Returns
+        -------
+        dict[int, set[int]]
+            Mapping from assoc_type_fk to set of observation PKs
+        """
         if not self.grouped_obs_file.exists():
-            return set()
+            return {}
 
         with open(self.grouped_obs_file) as f:
             data = json.load(f)
-            return set(data.get("grouped_obs", []))
+            # Convert list values back to sets
+            return {int(k): set(v) for k, v in data.get("grouped_by_type", {}).items()}
 
     def load_group_index(self) -> dict[str, GroupInfo]:
         """Load group index from JSON file."""
@@ -188,9 +222,16 @@ class FilesystemBackend(StateBackend):
                 index[key] = GroupInfo(**info_dict)
             return index
 
-    def save_grouped_observations(self, grouped_obs: set[int]) -> None:
-        """Save grouped observations to JSON file."""
-        data = {"grouped_obs": sorted(list(grouped_obs))}
+    def save_grouped_observations(self, grouped_obs: dict[int, set[int]]) -> None:
+        """Save grouped observations to JSON file.
+        
+        Parameters
+        ----------
+        grouped_obs : dict[int, set[int]]
+            Mapping from assoc_type_fk to set of observation PKs
+        """
+        # Convert sets to lists for JSON serialization
+        data = {"grouped_by_type": {k: sorted(list(v)) for k, v in grouped_obs.items()}}
         with open(self.grouped_obs_file, "w") as f:
             json.dump(data, f, indent=2)
 
@@ -223,7 +264,7 @@ class AssociationState:
             Database or filesystem backend for persistence
         """
         self.backend = backend
-        self._grouped_obs: set[int] = set()
+        self._grouped_obs_by_type: dict[int, set[int]] = {}
         self._group_index: dict[str, GroupInfo] = {}
         self._dirty_grouped = False
         self._dirty_index = False
@@ -233,42 +274,47 @@ class AssociationState:
 
     def _load(self) -> None:
         """Load state from backend."""
-        self._grouped_obs = self.backend.load_grouped_observations()
+        self._grouped_obs_by_type = self.backend.load_grouped_observations()
         self._group_index = self.backend.load_group_index()
         self._dirty_grouped = False
         self._dirty_index = False
 
-    def is_grouped(self, obs_pk: int) -> bool:
+    def is_grouped(self, obs_pk: int, assoc_type_fk: int) -> bool:
         """
-        Check if observation is already in a group.
+        Check if observation is already in a group of specific type.
 
         Parameters
         ----------
         obs_pk : int
             Observation primary key
+        assoc_type_fk : int
+            Association type foreign key
 
         Returns
         -------
         bool
-            True if observation is already grouped
+            True if observation is already grouped for this association type
         """
-        return obs_pk in self._grouped_obs
+        return obs_pk in self._grouped_obs_by_type.get(assoc_type_fk, set())
 
-    def get_ungrouped(self, obs_pks: list[int]) -> list[int]:
+    def get_ungrouped(self, obs_pks: list[int], assoc_type_fk: int) -> list[int]:
         """
-        Filter to observations not yet grouped.
+        Filter to observations not yet grouped for specific association type.
 
         Parameters
         ----------
         obs_pks : list[int]
             List of observation PKs to check
+        assoc_type_fk : int
+            Association type foreign key
 
         Returns
         -------
         list[int]
-            Subset of PKs that are not yet grouped
+            Subset of PKs that are not yet grouped for this type
         """
-        return [pk for pk in obs_pks if pk not in self._grouped_obs]
+        grouped_set = self._grouped_obs_by_type.get(assoc_type_fk, set())
+        return [pk for pk in obs_pks if pk not in grouped_set]
 
     def get_existing_group(self, candidate_key: str) -> GroupInfo | None:
         """
@@ -286,17 +332,22 @@ class AssociationState:
         """
         return self._group_index.get(candidate_key)
 
-    def mark_grouped(self, obs_pk: int) -> None:
+    def mark_grouped(self, obs_pk: int, assoc_type_fk: int) -> None:
         """
-        Mark observation as grouped.
+        Mark observation as grouped for specific association type.
 
         Parameters
         ----------
         obs_pk : int
             Observation primary key
+        assoc_type_fk : int
+            Association type foreign key
         """
-        if obs_pk not in self._grouped_obs:
-            self._grouped_obs.add(obs_pk)
+        if assoc_type_fk not in self._grouped_obs_by_type:
+            self._grouped_obs_by_type[assoc_type_fk] = set()
+        
+        if obs_pk not in self._grouped_obs_by_type[assoc_type_fk]:
+            self._grouped_obs_by_type[assoc_type_fk].add(obs_pk)
             self._dirty_grouped = True
 
     def register_group(self, group_info: GroupInfo) -> None:
@@ -329,7 +380,7 @@ class AssociationState:
     def flush(self) -> None:
         """Persist dirty state to backend."""
         if self._dirty_grouped:
-            self.backend.save_grouped_observations(self._grouped_obs)
+            self.backend.save_grouped_observations(self._grouped_obs_by_type)
             self._dirty_grouped = False
 
         if self._dirty_index:

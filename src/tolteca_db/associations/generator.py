@@ -327,14 +327,14 @@ class AssociationGenerator:
         # Create pool for fast filtering
         pool = ObservationPool(observations)
         
-        # Filter to ungrouped observations if incremental mode
+        # NOTE: In incremental mode, we don't pre-filter observations globally
+        # because observations can belong to multiple group types.
+        # Instead, we check per-collator in _process_collator_incremental.
+        # For now, we process all observations and track already-grouped per type.
         if incremental and self.state is not None:
-            obs_pks = pool.data["pk"].tolist()
-            ungrouped_pks = self.state.get_ungrouped(obs_pks)
-            stats.observations_already_grouped = len(obs_pks) - len(ungrouped_pks)
-            
-            # Filter pool to ungrouped only
-            pool.data = pool.data[pool.data["pk"].isin(ungrouped_pks)]
+            # Still track scanned vs processed at the generator level
+            # but the actual filtering happens per-collator
+            pass
         
         stats.observations_processed = len(pool)
         
@@ -493,9 +493,10 @@ class AssociationGenerator:
             # Create association entries for new members
             for assoc_info in assoc_infos:
                 obs_pk = assoc_info.data_prod_pk
+                assoc_type_fk = self._assoc_type_pks[assoc_info.data_prod_assoc_type]
                 
-                # Only create association if not already grouped
-                if not self.state.is_grouped(obs_pk):
+                # Only create association if not already grouped for THIS type
+                if not self.state.is_grouped(obs_pk, assoc_type_fk):
                     group_pk = existing_group.group_pk if existing_group else group_dp.pk
                     self._create_association(
                         group_dp_pk=group_pk,
@@ -504,8 +505,8 @@ class AssociationGenerator:
                     )
                     assocs_created += 1
                     
-                    # Mark as grouped
-                    self.state.mark_grouped(obs_pk)
+                    # Mark as grouped for THIS association type
+                    self.state.mark_grouped(obs_pk, assoc_type_fk)
         
         return {"groups": groups_created, "updated": groups_updated, "assocs": assocs_created}
 
