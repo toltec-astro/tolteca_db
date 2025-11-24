@@ -11,9 +11,16 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from tolteca_db.constants import DataProdAssocType as DataProdAssocTypeConst
 from tolteca_db.constants import DataProdType as DataProdTypeConst
 from tolteca_db.constants import FlagSeverity, ToltecDataKind
-from tolteca_db.models.orm import DataKind, DataProdType, Flag, Location
+from tolteca_db.models.orm import (
+    DataKind,
+    DataProdAssocType,
+    DataProdType,
+    Flag,
+    Location,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -25,7 +32,8 @@ def populate_registry_tables(session: Session) -> dict[str, int]:
     """Populate registry tables with standard TolTEC values.
     
     Creates entries for:
-    - DataProdType (12 types)
+    - DataProdType (8 types)
+    - DataProdAssocType (7 association types)
     - DataKind (4 kinds from ToltecDataKind)
     - Flag (4 severity levels)
     - Location (1 default location: LMT)
@@ -49,10 +57,11 @@ def populate_registry_tables(session: Session) -> dict[str, int]:
     >>> with Session(engine) as session:
     ...     counts = populate_registry_tables(session)
     ...     print(counts)
-    {'data_prod_type': 8, 'data_kind': 4, 'flag': 4, 'location': 1}
+    {'data_prod_type': 8, 'data_prod_assoc_type': 7, 'data_kind': 4, 'flag': 4, 'location': 1}
     """
     counts = {
         "data_prod_type": 0,
+        "data_prod_assoc_type": 0,
         "data_kind": 0,
         "flag": 0,
         "location": 0,
@@ -69,6 +78,20 @@ def populate_registry_tables(session: Session) -> dict[str, int]:
             )
             session.add(new_type)
             counts["data_prod_type"] += 1
+    
+    # Populate DataProdAssocType
+    for assoc_type in DataProdAssocTypeConst:
+        stmt = select(DataProdAssocType).where(
+            DataProdAssocType.label == assoc_type.value
+        )
+        existing = session.scalar(stmt)
+        if not existing:
+            new_assoc_type = DataProdAssocType(
+                label=assoc_type.value,
+                description=f"TolTEC association type: {assoc_type.value}",
+            )
+            session.add(new_assoc_type)
+            counts["data_prod_assoc_type"] += 1
     
     # Populate DataKind (individual flags from ToltecDataKind)
     data_kinds = [

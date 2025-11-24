@@ -6,6 +6,7 @@ with simulated toltec_db.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from dagster import ConfigurableResource, InitResourceContext
@@ -23,7 +24,9 @@ __all__ = [
 
 # Module-level singleton for shared test database
 # Use file-based database to share across Dagster processes
-_SHARED_TEST_DB_PATH = Path("./.dagster/test_toltecdb.sqlite")
+# Use DAGSTER_HOME if set, otherwise fall back to .dagster
+_DAGSTER_HOME = os.getenv("DAGSTER_HOME", ".dagster")
+_SHARED_TEST_DB_PATH = Path(_DAGSTER_HOME) / "test_toltecdb.sqlite"
 _SHARED_TEST_DB: Database | None = None
 
 
