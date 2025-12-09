@@ -71,6 +71,7 @@ class DataProdType(str, Enum):
     DP_CAL_GROUP = "dp_cal_group"       # Calibration groupings for analysis
     DP_DRIVEFIT = "dp_drivefit"         # Detector characterization
     DP_FOCUS_GROUP = "dp_focus_group"   # Focus analysis groupings
+    DP_ASTIG_GROUP = "dp_astig_group"   # Astigmatism analysis groupings
     DP_MAP = "dp_map"                   # Science maps (future)
     DP_CATALOG = "dp_catalog"           # Source catalogs (future)
 
@@ -104,6 +105,9 @@ class DataProdAssocType(str, Enum):
 
     DPA_FOCUS_GROUP_RAW_OBS = "dpa_focus_group_raw_obs"
     # "focus group contains raw obs"
+
+    DPA_ASTIG_GROUP_RAW_OBS = "dpa_astig_group_raw_obs"
+    # "astigmatism group contains raw obs"
 
     # Generic collection
     DPA_NAMED_GROUP_DATA_PROD = "dpa_named_group_data_prod"

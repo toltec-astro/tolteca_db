@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from tolteca_db.constants import DataProdAssocType, DataProdType, ToltecDataKind
-from tolteca_db.models.metadata import CalGroupMeta, DrivefitMeta, FocusGroupMeta
+from tolteca_db.models.metadata import CalGroupMeta, DrivefitMeta, FocusGroupMeta, AstigGroupMeta
 
 from .base import AssociationInfo, CollatorBase, Group, GroupFlag, Position
 
@@ -19,6 +19,7 @@ __all__ = [
     "CalGroupCollator",
     "DriveFitCollator",
     "FocusGroupCollator",
+    "AstigmatismGroupCollator",
 ]
 
 
@@ -256,6 +257,107 @@ class CollateByMetadata(CollatorBase):
         return [g for g in groups_by_key.values() if len(g.items) > 1]
 
 
+class CollateByConsecutiveObsnum(CollatorBase):
+    """Base for collators that group by consecutive observation numbers.
+    
+    This collator identifies sequences of observations with consecutive obsnums
+    that share a common characteristic (e.g., obs_goal='focus'). Groups are
+    split when there's a gap in the obsnum sequence.
+    
+    Used for sequences like focus measurements and astigmatism measurements
+    where consecutive observations form a logical group.
+    """
+
+    # Subclasses define these
+    obs_goal_filter: ClassVar[tuple[str, ...]]  # Allowed obs_goal values
+
+    def _filter_items(self, observations: list) -> list:
+        """Filter observations by obs_goal.
+        
+        Parameters
+        ----------
+        observations : list
+            All observations to consider
+            
+        Returns
+        -------
+        list
+            Filtered observations with matching obs_goal
+        """
+        filtered = []
+        for obs in observations:
+            if not obs.meta:
+                continue
+            
+            obs_goal = getattr(obs.meta, 'obs_goal', None)
+            if obs_goal in self.obs_goal_filter:
+                filtered.append(obs)
+        
+        return filtered
+
+    def make_groups(self, observations: list) -> list[Group]:
+        """Identify groups by consecutive obsnums.
+        
+        Parameters
+        ----------
+        observations : list
+            Observations sorted by time/obsnum
+            
+        Returns
+        -------
+        list[Group]
+            Identified groups with consecutive obsnums
+        """
+        filtered = self._filter_items(observations)
+        if not filtered:
+            return []
+        
+        # Sort by (master, obsnum) to ensure proper ordering
+        filtered.sort(key=lambda obs: (
+            obs.meta.master if obs.meta else "",
+            obs.meta.obsnum if obs.meta else 0
+        ))
+        
+        # Group consecutive obsnums
+        groups = []
+        current_group = Group()
+        prev_master = None
+        prev_obsnum = None
+        
+        for obs in filtered:
+            if not obs.meta:
+                continue
+            
+            master = obs.meta.master
+            obsnum = obs.meta.obsnum
+            
+            if obsnum is None:
+                continue
+            
+            # Start new group if:
+            # 1. First observation
+            # 2. Master changed
+            # 3. Obsnum not consecutive (gap > 1)
+            if (prev_obsnum is None or 
+                master != prev_master or 
+                obsnum != prev_obsnum + 1):
+                # Save current group if it has items
+                if current_group.items:
+                    groups.append(current_group)
+                current_group = Group()
+            
+            current_group.append(obs)
+            prev_master = master
+            prev_obsnum = obsnum
+        
+        # Add final group
+        if current_group.items:
+            groups.append(current_group)
+        
+        # Return groups with 2+ items
+        return [g for g in groups if len(g.items) >= 2]
+
+
 class CalGroupCollator(CollateByPosition):
     """Collator for calibration sequences.
     
@@ -366,40 +468,89 @@ class DriveFitCollator(CollateByMetadata):
         )
 
 
-class FocusGroupCollator(CollateByMetadata):
+class FocusGroupCollator(CollateByConsecutiveObsnum):
     """Collator for focus measurement sequences.
     
-    Identifies groups of observations with obs_goal='focus'. These are used
-    to measure and optimize telescope focus.
+    Identifies groups of consecutive observations with obs_goal='focus'.
+    These are used to measure and optimize telescope focus.
+    
+    Groups are formed from consecutive obsnums (e.g., 145647, 145648, 145649).
+    A gap in obsnum sequence starts a new group.
     """
 
     data_prod_type: ClassVar[str] = DataProdType.DP_FOCUS_GROUP.value
     data_prod_assoc_type: ClassVar[str] = DataProdAssocType.DPA_FOCUS_GROUP_RAW_OBS.value
-    collate_by_meta_keys: ClassVar[tuple[str, ...]] = ("obs_goal",)
-    collate_by_meta_values_allowed: ClassVar[tuple[None | tuple, ...]] = (("focus",),)
-
-    def make_groups(self, observations: list) -> list[Group]:
-        """Create focus groups, filtering to those with 2+ observations."""
-        groups = super().make_groups(observations)
-        return [g for g in groups if len(g.items) > 1]
+    obs_goal_filter: ClassVar[tuple[str, ...]] = ("focus",)
 
     def _make_meta(self, group: Group) -> FocusGroupMeta:
         """Create metadata for focus group."""
         if not group.items or not group.items[0].meta:
             master = "toltec"
-            obsnum = 0
+            obsnum_start = 0
+            obsnum_end = 0
         else:
             first = group.items[0].meta
+            last = group.items[-1].meta
             master = first.master or "toltec"
-            obsnum = first.obsnum or 0
+            obsnum_start = first.obsnum or 0
+            obsnum_end = last.obsnum or obsnum_start
         
         n_items = len(group.items)
-        name = f"{master}-{obsnum}-g{n_items}-focus"
+        
+        # Name includes obsnum range for consecutive groups
+        if obsnum_start == obsnum_end:
+            name = f"{master}-{obsnum_start}-g{n_items}-focus"
+        else:
+            name = f"{master}-{obsnum_start}to{obsnum_end}-g{n_items}-focus"
         
         return FocusGroupMeta(
             name=name,
             data_prod_type=DataProdType.DP_FOCUS_GROUP,
             master=master,
-            obsnum=obsnum,
+            obsnum=obsnum_start,
+            n_items=n_items,
+        )
+
+
+class AstigmatismGroupCollator(CollateByConsecutiveObsnum):
+    """Collator for astigmatism measurement sequences.
+    
+    Identifies groups of consecutive observations with obs_goal='astig' or 'astigmatism'.
+    These are used to measure and correct for telescope astigmatism.
+    
+    Groups are formed from consecutive obsnums (e.g., 145650, 145651, 145652).
+    A gap in obsnum sequence starts a new group.
+    """
+
+    data_prod_type: ClassVar[str] = DataProdType.DP_ASTIG_GROUP.value
+    data_prod_assoc_type: ClassVar[str] = DataProdAssocType.DPA_ASTIG_GROUP_RAW_OBS.value
+    obs_goal_filter: ClassVar[tuple[str, ...]] = ("astig", "astigmatism")
+
+    def _make_meta(self, group: Group) -> AstigGroupMeta:
+        """Create metadata for astigmatism group."""
+        if not group.items or not group.items[0].meta:
+            master = "toltec"
+            obsnum_start = 0
+            obsnum_end = 0
+        else:
+            first = group.items[0].meta
+            last = group.items[-1].meta
+            master = first.master or "toltec"
+            obsnum_start = first.obsnum or 0
+            obsnum_end = last.obsnum or obsnum_start
+        
+        n_items = len(group.items)
+        
+        # Name includes obsnum range for consecutive groups
+        if obsnum_start == obsnum_end:
+            name = f"{master}-{obsnum_start}-g{n_items}-astig"
+        else:
+            name = f"{master}-{obsnum_start}to{obsnum_end}-g{n_items}-astig"
+        
+        return AstigGroupMeta(
+            name=name,
+            data_prod_type=DataProdType.DP_ASTIG_GROUP,
+            master=master,
+            obsnum=obsnum_start,
             n_items=n_items,
         )

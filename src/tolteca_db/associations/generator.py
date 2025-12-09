@@ -11,10 +11,10 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tolteca_db.models.metadata import CalGroupMeta, DrivefitMeta, FocusGroupMeta
+from tolteca_db.models.metadata import AstigGroupMeta, CalGroupMeta, DrivefitMeta, FocusGroupMeta
 from tolteca_db.models.orm import DataProd, DataProdAssoc, DataProdAssocType, DataProdType
 
-from .collators import CalGroupCollator, DriveFitCollator, FocusGroupCollator
+from .collators import AstigmatismGroupCollator, CalGroupCollator, DriveFitCollator, FocusGroupCollator
 from .pool import ObservationPool
 from .state import AssociationState, GroupInfo
 
@@ -45,6 +45,8 @@ class AssociationStats:
         Number of drivefit groups
     focus_groups : int
         Number of focus groups
+    astig_groups : int
+        Number of astigmatism groups
     """
 
     observations_scanned: int = 0
@@ -56,6 +58,7 @@ class AssociationStats:
     cal_groups: int = 0
     drivefit_groups: int = 0
     focus_groups: int = 0
+    astig_groups: int = 0
 
 
 class AssociationGenerator:
@@ -91,6 +94,7 @@ class AssociationGenerator:
             CalGroupCollator(),
             DriveFitCollator(),
             FocusGroupCollator(),
+            AstigmatismGroupCollator(),
         ]
         
         # Pre-fetch type PKs for efficiency
@@ -361,6 +365,8 @@ class AssociationGenerator:
                 stats.drivefit_groups = group_stats["groups"] + group_stats.get("updated", 0)
             elif isinstance(collator, FocusGroupCollator):
                 stats.focus_groups = group_stats["groups"] + group_stats.get("updated", 0)
+            elif isinstance(collator, AstigmatismGroupCollator):
+                stats.astig_groups = group_stats["groups"] + group_stats.get("updated", 0)
         
         # Flush state if incremental
         if incremental and self.state is not None:

@@ -74,6 +74,7 @@ __all__ = [
     "adaptix_json_type",
     "AnyDataProdMeta",
     "AnyInterfaceMeta",
+    "AstigGroupMeta",
     "CalGroupMeta",
     "DataProdMetaBase",
     "DrivefitMeta",
@@ -362,6 +363,35 @@ class FocusGroupMeta(DataProdMetaBase, ObsIdMixin):
 
 
 @dataclass
+class AstigGroupMeta(DataProdMetaBase, ObsIdMixin):
+    """Metadata for dp_astig_group.
+
+    Attributes
+    ----------
+    tag : Literal["astig_group"]
+        Discriminator for union type deserialization
+    n_items : int
+        Number of raw observations in group
+    astig_positions : list[tuple[float, float]] | None
+        Astigmatism correction positions sampled (x, y)
+    best_astig : tuple[float, float] | None
+        Optimal astigmatism correction (x, y)
+    astig_metric : str | None
+        Metric used (FWHM, Strehl, etc.)
+    
+    Notes
+    -----
+    Identification fields (obsnum, master) inherited from ObsIdMixin.
+    """
+
+    tag: Literal["astig_group"] = "astig_group"  # Discriminator for union types
+    n_items: int = 0
+    astig_positions: list[tuple[float, float]] | None = None
+    best_astig: tuple[float, float] | None = None
+    astig_metric: str | None = None
+
+
+@dataclass
 class NamedGroupMeta(DataProdMetaBase):
     """Metadata specific to dp_named_group.
 
@@ -541,6 +571,7 @@ AnyDataProdMeta = (
     | CalGroupMeta
     | DrivefitMeta
     | FocusGroupMeta
+    | AstigGroupMeta
     | NamedGroupMeta
 )
 
