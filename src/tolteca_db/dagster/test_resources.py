@@ -39,6 +39,8 @@ class SimulatorConfig(ConfigurableResource):
         Simulated integration time (period of simulator execution)
     enabled : bool
         Whether simulator should run
+    obsnum_filter : list[int] | None
+        Optional list of ObsNums to simulate (for testing specific observations)
     """
 
     integration_time_seconds: float = Field(
@@ -48,6 +50,10 @@ class SimulatorConfig(ConfigurableResource):
     enabled: bool = Field(
         default=True,
         description="Whether simulator is enabled",
+    )
+    obsnum_filter: list[int] | None = Field(
+        default=None,
+        description="Optional list of specific ObsNums to simulate",
     )
 
 

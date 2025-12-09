@@ -272,6 +272,7 @@ def process_interface(
 @op(
     name="collect_results",
     description="Collect and aggregate results from all interfaces",
+    required_resource_keys={"tolteca_db", "location"},
 )
 def collect_results(
     context: OpExecutionContext,
@@ -333,6 +334,39 @@ def collect_results(
             f"Quartet processing failed: {failure_count}/{len(interface_results)} "
             f"interfaces failed. Failed: {[r['interface'] for r in failures]}"
         )
+
+    # Add tel file as additional source to DataProd
+    # Get data_prod_pk from first successful interface result
+    data_prod_pk = None
+    for result in interface_results:
+        if result["status"] == "success" and "data_prod_pk" in result:
+            data_prod_pk = int(result["data_prod_pk"])
+            break
+    
+    if data_prod_pk:
+        from .helpers import add_tel_file_source
+        
+        tolteca_db = context.resources.tolteca_db
+        location = context.resources.location
+        
+        tel_result = add_tel_file_source(
+            master=metadata.master,
+            obsnum=metadata.obsnum,
+            subobsnum=metadata.subobsnum,
+            scannum=metadata.scannum,
+            data_prod_pk=data_prod_pk,
+            tolteca_db=tolteca_db,
+            location=location,
+        )
+        
+        if tel_result["added"]:
+            context.log.info(f"✓ Added tel file: {tel_result['source_uri']}")
+        elif tel_result["status"] == "tel_file_not_found":
+            context.log.warning(f"⚠ Tel file not found for quartet {quartet_key}")
+        elif tel_result["status"] == "already_exists":
+            context.log.info(f"Tel file already exists: {tel_result['source_uri']}")
+        else:
+            context.log.warning(f"Tel file not added: {tel_result['status']}")
 
     return QuartetResult(
         quartet_key=quartet_key,

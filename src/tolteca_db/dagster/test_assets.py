@@ -55,21 +55,8 @@ def acquisition_simulator(context: AssetExecutionContext) -> Output[str]:
     if not simulator.enabled:
         return Output("Simulator disabled")
 
-    # TESTING: Only run 4 ticks to diagnose performance and overhead
-    # Count how many ticks have occurred by counting distinct quartets
-    with toltec_db.get_session() as check_session:
-        tick_count = check_session.execute(
-            text("""
-            SELECT COUNT(DISTINCT ObsNum || '-' || SubObsNum || '-' || ScanNum || '-' || Master)
-            FROM toltec
-        """)
-        ).scalar()
-
-        if tick_count >= 4:
-            context.log.info(
-                f"Simulator tick limit reached ({tick_count}/4 quartets) - no-op"
-            )
-            return Output(f"Tick limit reached ({tick_count}/4 quartets) - no-op")
+    # Get obsnum filter if specified
+    obsnum_filter = simulator.obsnum_filter
 
     with toltec_db.get_session() as session:
         # Check if db is empty or latest quartet entries are all Valid=1
@@ -90,7 +77,7 @@ def acquisition_simulator(context: AssetExecutionContext) -> Output[str]:
             # Database is empty - insert first quartet from source db
             context.log.info("Database empty - loading first quartet from source db")
             _insert_next_quartet_from_source_db(
-                context, session, toltec_db.source_db_url
+                context, session, toltec_db.source_db_url, obsnum_filter
             )
             return Output("Inserted first quartet with Valid=0")
 
@@ -102,7 +89,7 @@ def acquisition_simulator(context: AssetExecutionContext) -> Output[str]:
                 f"{latest_quartet.ScanNum} all Valid=1 - loading next quartet"
             )
             _insert_next_quartet_from_source_db(
-                context, session, toltec_db.source_db_url
+                context, session, toltec_db.source_db_url, obsnum_filter
             )
             return Output(
                 f"Inserted next quartet after completing {latest_quartet.ObsNum}-"
@@ -137,6 +124,33 @@ def acquisition_simulator(context: AssetExecutionContext) -> Output[str]:
         session.commit()
 
         updated_count = result.rowcount
+        
+        # Check if this completes the obsnum filter
+        if obsnum_filter:
+            # Get all distinct ObsNums that have been inserted
+            inserted_obsnums = session.execute(
+                text("SELECT DISTINCT ObsNum FROM toltec WHERE 1=1 ORDER BY ObsNum")
+            ).fetchall()
+            inserted_obsnum_list = [row[0] for row in inserted_obsnums]
+            
+            # Check which filtered ObsNums remain
+            remaining_obsnums = [obs for obs in obsnum_filter if obs not in inserted_obsnum_list]
+            
+            if not remaining_obsnums:
+                context.log.info(
+                    f"All filtered ObsNums {obsnum_filter} have been inserted and marked Valid=1 - simulator complete"
+                )
+                return Output(
+                    f"Marked {updated_count} interfaces Valid=1 for quartet "
+                    f"{latest_quartet.ObsNum}-{latest_quartet.SubObsNum}-"
+                    f"{latest_quartet.ScanNum}. All filtered ObsNums complete."
+                )
+            
+            context.log.info(
+                f"Simulator filter: {len(inserted_obsnum_list)}/{len(obsnum_filter)} ObsNums processed. "
+                f"Remaining: {remaining_obsnums}"
+            )
+        
         return Output(
             f"Marked {updated_count} interfaces Valid=1 for quartet "
             f"{latest_quartet.ObsNum}-{latest_quartet.SubObsNum}-"
@@ -148,6 +162,7 @@ def _insert_next_quartet_from_source_db(
     context: AssetExecutionContext,
     test_session: Session,
     source_db_url: str,
+    obsnum_filter: list[int] | None = None,
 ) -> None:
     """Insert next quartet from source database into test database.
 
@@ -163,6 +178,8 @@ def _insert_next_quartet_from_source_db(
         SQLAlchemy session for test database
     source_db_url : str
         URL of source database to copy from
+    obsnum_filter : list[int] | None
+        Optional list of specific ObsNums to simulate
     """
     from sqlalchemy import create_engine
 
@@ -179,24 +196,31 @@ def _insert_next_quartet_from_source_db(
     source_engine = create_engine(source_db_url)
 
     with Session(source_engine) as source_session:
+        # Apply obsnum filter if specified
+        obsnum_filter_clause = ""
+        if obsnum_filter:
+            obsnum_list_str = ",".join(str(obs) for obs in obsnum_filter)
+            obsnum_filter_clause = f" AND ObsNum IN ({obsnum_list_str})"
+        
         # Get next distinct quartet from source db
         if last_quartet.obsnum is None:
             # Empty db - get first quartet
-            next_quartet_query = text("""
+            next_quartet_query = text(f"""
                 SELECT DISTINCT ObsNum, SubObsNum, ScanNum, Master
                 FROM toltec
+                WHERE 1=1{obsnum_filter_clause}
                 ORDER BY ObsNum ASC, SubObsNum ASC, ScanNum ASC
                 LIMIT 1
             """)
         else:
             # Get next quartet after the last one inserted
-            next_quartet_query = text("""
+            next_quartet_query = text(f"""
                 SELECT DISTINCT ObsNum, SubObsNum, ScanNum, Master
                 FROM toltec
-                WHERE (ObsNum > :last_obsnum)
+                WHERE ((ObsNum > :last_obsnum)
                    OR (ObsNum = :last_obsnum AND SubObsNum > :last_subobsnum)
                    OR (ObsNum = :last_obsnum AND SubObsNum = :last_subobsnum 
-                       AND ScanNum > :last_scannum)
+                       AND ScanNum > :last_scannum)){obsnum_filter_clause}
                 ORDER BY ObsNum ASC, SubObsNum ASC, ScanNum ASC
                 LIMIT 1
             """)

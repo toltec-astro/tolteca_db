@@ -118,6 +118,8 @@ def get_definitions(test_mode: bool = False) -> Definitions:
 def get_test_definitions(
     source_db_url: str = "sqlite:///../run/toltecdb_last_30days.sqlite",
     integration_time_seconds: float = 5.0,
+    obsnum_filter: list[int] | None = None,
+    data_root: str | None = None,
 ) -> Definitions:
     """
     Create test Dagster definitions with simulator for testing.
@@ -128,6 +130,10 @@ def get_test_definitions(
         URL of source database to copy quartets from
     integration_time_seconds : float
         Simulated integration time between simulator ticks
+    obsnum_filter : list[int] | None
+        Optional list of specific ObsNums to simulate (for testing)
+    data_root : str | None
+        Path to data root directory for file storage
 
     Returns
     -------
@@ -140,7 +146,8 @@ def get_test_definitions(
     >>> from tolteca_db.dagster import get_test_definitions
     >>> defs = get_test_definitions(
     ...     source_db_url="sqlite:///../run/toltecdb_last_30days.sqlite",
-    ...     integration_time_seconds=5.0
+    ...     integration_time_seconds=5.0,
+    ...     obsnum_filter=[145647, 145648]
     ... )
     """
     from .test_assets import acquisition_simulator
@@ -158,7 +165,7 @@ def get_test_definitions(
         "location": LocationConfig(
             location_pk="LMT",
             location_name="Large Millimeter Telescope (Test)",
-            data_root="../run/data_lmt",
+            data_root=data_root,
         ),
         "validation": ValidationConfig(
             max_interface_count=13,
@@ -169,6 +176,7 @@ def get_test_definitions(
         "simulator": SimulatorConfig(
             integration_time_seconds=integration_time_seconds,
             enabled=True,
+            obsnum_filter=obsnum_filter,
         ),
     }
 
@@ -201,9 +209,21 @@ def get_test_definitions(
 
 # Default definitions (test mode with simulator for development)
 # Override by creating a workspace.yaml with production config
+
+# Parse obsnum filter from environment (comma-separated list)
+_obsnum_filter_str = EnvVar("TOLTECA_SIMULATOR_OBSNUMS").get_value("")
+_obsnum_filter = None
+if _obsnum_filter_str:
+    try:
+        _obsnum_filter = [int(x.strip()) for x in _obsnum_filter_str.split(",") if x.strip()]
+    except ValueError:
+        pass  # Invalid format, use None
+
 defs = get_test_definitions(
     source_db_url=EnvVar("TOLTEC_DB_SOURCE_URL").get_value(
         "sqlite:///../run/toltecdb_last_30days.sqlite"
     ),
     integration_time_seconds=float(EnvVar("TOLTECA_SIMULATOR_INTEGRATION_TIME").get_value("15.0")),
+    obsnum_filter=_obsnum_filter,
+    data_root=EnvVar("TOLTECA_WEB_DATA_LMT_ROOTPATH").get_value(None),
 )

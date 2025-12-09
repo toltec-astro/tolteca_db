@@ -385,9 +385,17 @@ def ingest_from_toltec_db(
         console.print(f"[red]Error:[/red] data_root not found: {data_root}")
         raise typer.Exit(code=1)
     
+    # Use absolute() to get absolute path without following symlinks,
+    # then normalize to remove .. components
+    import os
+    toltec_db = Path(os.path.normpath(toltec_db.absolute()))
+    data_root = Path(os.path.normpath(data_root.absolute()))
+    
     # Use data_root as location_root if not specified
     if location_root is None:
         location_root = data_root
+    else:
+        location_root = Path(os.path.normpath(location_root.absolute()))
     
     console.print(f"[bold blue]Ingesting from toltec_db:[/bold blue] {toltec_db}")
     console.print(f"Data root: {data_root}")
@@ -461,18 +469,18 @@ def ingest_from_toltec_db(
                 raise typer.Exit(code=1)
             
             # Create location
-            console.print(f"Creating location '{location}' with root: file://{location_root.resolve()}")
+            console.print(f"Creating location '{location}' with root: file://{location_root}")
             loc = Location(
                 label=location,
                 location_type="filesystem",
-                root_uri=f"file://{location_root.resolve()}",
+                root_uri=f"file://{location_root}",
                 priority=100,
             )
             session.add(loc)
             session.flush()
         else:
             # Verify root_uri matches
-            expected_root = f"file://{location_root.resolve()}"
+            expected_root = f"file://{location_root}"
             if loc.root_uri != expected_root:
                 console.print(f"[yellow]Warning:[/yellow] Location root_uri mismatch:")
                 console.print(f"  Expected: {expected_root}")
@@ -495,15 +503,45 @@ def ingest_from_toltec_db(
             task = progress.add_task("[cyan]Ingesting files...", total=len(rows))
             
             for row in rows:
-                # Construct file path
+                # Construct file path from toltec_db FileName
                 filename = row['FileName']
-                # Strip /data_lmt prefix if present and make relative to data_root
-                if filename.startswith('/data_lmt/'):
-                    filename = filename[len('/data_lmt/'):]
-                elif filename.startswith('/data_lmt'):
-                    filename = filename[len('/data_lmt'):].lstrip('/')
                 
-                file_path = data_root / filename
+                # SQLite filenames: /data_lmt/toltec/tcs/toltec0/file.nc
+                # data_root: ../run/data_lmt/toltec/tcs
+                # We need to strip the common prefix and make relative to data_root
+                
+                # First, strip /data_lmt/ prefix from SQLite path
+                if filename.startswith('/data_lmt/'):
+                    filename_rel = filename[len('/data_lmt/'):]  # toltec/tcs/toltec0/file.nc
+                elif filename.startswith('/data_lmt'):
+                    filename_rel = filename[len('/data_lmt'):].lstrip('/')
+                else:
+                    filename_rel = filename
+                
+                # Now check if data_root contains a subpath that overlaps
+                # data_root might be: /abs/path/data_lmt/toltec/tcs
+                # filename_rel: toltec/tcs/toltec0/file.nc
+                # Need to find the overlap and strip it from filename_rel
+                
+                # data_root is already resolved to absolute path
+                data_root_parts = data_root.parts
+                filename_parts = Path(filename_rel).parts
+                
+                # Find the longest suffix of data_root_parts that matches a prefix of filename_parts
+                # Example: data_root ends with (..., 'toltec', 'tcs')
+                #          filename starts with ('toltec', 'tcs', 'toltec0', ...)
+                #          We want to strip ('toltec', 'tcs') from filename
+                overlap = 0
+                for suffix_len in range(1, min(len(data_root_parts), len(filename_parts)) + 1):
+                    # Check if the last suffix_len parts of data_root match the first suffix_len parts of filename
+                    if data_root_parts[-suffix_len:] == filename_parts[:suffix_len]:
+                        overlap = suffix_len
+                
+                # Strip overlapping parts from filename
+                if overlap > 0:
+                    filename_rel = str(Path(*filename_parts[overlap:]))
+                
+                file_path = data_root / filename_rel
                 
                 try:
                     # Parse file info from filename
@@ -630,3 +668,114 @@ def _generate_associations_after_ingest(engine, n_ingested: int) -> None:
     if stats.observations_already_grouped > 0:
         skip_pct = (stats.observations_already_grouped / stats.observations_scanned) * 100
         console.print(f"\n[green]Performance:[/green] Skipped {skip_pct:.1f}% of observations (already grouped)")
+
+
+@ingest_app.command(name="from-tel-csv")
+def from_tel_csv(
+    csv_path: Annotated[
+        Path,
+        typer.Argument(help="Path to LMT telescope metadata CSV"),
+    ],
+    location: Annotated[
+        str,
+        typer.Option("--location", "-l", help="Location label for tel metadata"),
+    ] = "LMT",
+    skip_existing: Annotated[
+        bool,
+        typer.Option("--skip-existing", help="Skip observations with existing tel sources"),
+    ] = True,
+    create_data_prods: Annotated[
+        bool,
+        typer.Option("--create-data-prods/--no-create-data-prods", help="Create DataProd entries if they don't exist"),
+    ] = True,
+    commit_batch_size: Annotated[
+        int,
+        typer.Option("--batch-size", help="Commit every N sources"),
+    ] = 100,
+    db_url: Annotated[
+        Optional[str],
+        typer.Option("--db", help="Database URL"),
+    ] = None,
+) -> None:
+    """
+    Ingest LMT telescope metadata from CSV file.
+    
+    CSV format: lmtmc_toltec_metadata.csv from LMT metadata database.
+    Creates DataProd entries (if needed) and DataProdSource entries with
+    tel_toltec interface metadata. Updates RawObsMeta with denormalized
+    telescope fields for efficient querying.
+    
+    Tel metadata is a first-class data source - DataProd entries can be
+    created from tel metadata alone, independent of roach ingestion.
+    
+    Example:
+        tolteca_db ingest from-tel-csv run/lmtmc_toltec_metadata.csv \\
+            --location LMT \\
+            --db "duckdb:///tolteca.duckdb"
+    """
+    from tolteca_db.db import get_engine
+    from sqlalchemy.orm import Session
+    from tolteca_db.models.orm import Location
+    from tolteca_db.ingest.tel_ingestor import TelCSVIngestor
+    from sqlalchemy import select
+    
+    if not csv_path.exists():
+        console.print(f"[red]Error:[/red] CSV file not found: {csv_path}")
+        raise typer.Exit(code=1)
+    
+    console.print(f"[bold blue]Ingesting Tel Metadata:[/bold blue] {csv_path}")
+    
+    engine = get_engine(db_url)
+    
+    with Session(engine) as session:
+        # Get or verify location exists
+        stmt = select(Location).where(Location.label == location)
+        loc = session.execute(stmt).scalar_one_or_none()
+        
+        if loc is None:
+            console.print(f"[red]Error:[/red] Location '{location}' not found. Create it first.")
+            console.print("[yellow]Hint:[/yellow] Use 'tolteca_db db init' to create locations")
+            raise typer.Exit(code=1)
+        
+        # Ingest CSV
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Processing tel metadata...", total=None)
+            
+            ingestor = TelCSVIngestor(
+                session=session,
+                location_pk=loc.pk,
+                skip_existing=skip_existing,
+                create_data_prods=create_data_prods,
+                commit_batch_size=commit_batch_size,
+            )
+            
+            stats = ingestor.ingest_csv(csv_path)
+            
+            progress.update(task, completed=True)
+        
+        console.print("[green]✓[/green] Tel metadata ingestion complete")
+    
+    # Display results
+    table = Table(title="Tel Metadata Ingestion Statistics")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Count", style="magenta", justify="right")
+    
+    table.add_row("Rows Scanned", str(stats.rows_scanned))
+    table.add_row("Rows Ingested", str(stats.rows_ingested))
+    table.add_row("Rows Skipped", str(stats.rows_skipped))
+    table.add_row("DataProds Created", str(stats.data_prods_created))
+    table.add_row("DataProds Updated", str(stats.data_prods_updated))
+    table.add_row("Sources Created", str(stats.sources_created))
+    
+    console.print(table)
+    
+    if stats.rows_failed > 0:
+        console.print("[yellow]Warning:[/yellow] Some rows failed to ingest")
+    
+    if stats.rows_skipped > 0 and skip_existing:
+        console.print(f"[dim]Note:[/dim] Skipped {stats.rows_skipped} rows (no matching DataProd or already exists)")

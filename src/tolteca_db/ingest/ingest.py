@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tolteca_db.constants import DataProdType as DataProdTypeConst, ToltecDataKind
-from tolteca_db.models.metadata import InterfaceFileMeta, RawObsMeta
+from tolteca_db.models.metadata import RoachInterfaceMeta, RawObsMeta
 from tolteca_db.models.orm import DataKind, DataProd, DataProdSource, DataProdType as DataProdTypeORM, Location
 
 from .file_scanner import FileScanner, ParsedFileInfo, guess_info_from_file
@@ -312,7 +312,6 @@ class DataIngestor:
             subobsnum=file_info.subobsnum,
             scannum=file_info.scannum,
             data_kind=file_info.data_kind.value if file_info.data_kind else 0,
-            nw_id=self.nw_id,
             obs_goal=obs_goal,
             source_name=source_name,
             obs_datetime=file_info.obs_datetime,
@@ -368,10 +367,15 @@ class DataIngestor:
             checksum = None
             availability_state = "missing"
         
-        # Create InterfaceFileMeta
-        interface_meta = InterfaceFileMeta(
+        # Create RoachInterfaceMeta
+        interface_meta = RoachInterfaceMeta(
+            obsnum=file_info.obsnum,
+            subobsnum=file_info.subobsnum,
+            scannum=file_info.scannum,
+            master=self.master,
             roach=file_info.roach,
             nw_id=self.nw_id,
+            interface=file_info.interface,
         )
         
         # Create DataProdSource

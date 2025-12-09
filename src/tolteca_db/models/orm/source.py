@@ -12,7 +12,7 @@ from sqlalchemy import DateTime, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from tolteca_db.constants import StorageRole
-from tolteca_db.models.metadata import InterfaceFileMeta, _json_type, adaptix_json_type
+from tolteca_db.models.metadata import AnyInterfaceMeta, _json_type, adaptix_json_type
 from tolteca_db.models.orm.base import Base
 from tolteca_db.utils import Created_at, Label, LabelKey, LongStr, Pk, Updated_at, fk, Name
 
@@ -48,8 +48,8 @@ class DataProdSource(Base):
         Checksum for verification
     last_verified_at : datetime | None
         Last successful verification
-    meta : InterfaceFileMeta
-        Interface-level metadata (nw_id, roach)
+    meta : AnyInterfaceMeta
+        Interface-level metadata (RoachInterfaceMeta for roach OR TelInterfaceMeta for tel)
     created_at : datetime
         Creation timestamp
     updated_at : datetime
@@ -74,11 +74,14 @@ class DataProdSource(Base):
     )
 
     # Structured metadata for interface files (Phase 3 - AdaptixJSON for type-safe JSON)
-    # AdaptixJSON provides automatic serialization for InterfaceFileMeta dataclass
-    # Example: source.meta = InterfaceFileMeta(interface="toltec", ...)
+    # AdaptixJSON provides automatic serialization for interface-level metadata:
+    # - RoachInterfaceMeta: For roach interfaces (toltec0-12) with nw_id, roach, hostname
+    # - TelInterfaceMeta: For tel interface (tel_toltec) with telescope metadata
+    # Example: source.meta = RoachInterfaceMeta(nw_id=0, roach=0, ...)
+    #          source.meta = TelInterfaceMeta(az_deg=180.0, el_deg=45.0, ...)
     # Type-safe metadata access without manual conversion
-    meta: Mapped[InterfaceFileMeta] = mapped_column(
-        adaptix_json_type(InterfaceFileMeta)
+    meta: Mapped[AnyInterfaceMeta] = mapped_column(
+        adaptix_json_type(AnyInterfaceMeta)
     )
 
     availability_state: Mapped[Name] = mapped_column(index=True)

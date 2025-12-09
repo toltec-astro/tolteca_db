@@ -16,6 +16,7 @@ __all__ = [
     "query_toltec_db_since",
     "query_quartet_status",
     "process_interface_data",
+    "add_tel_file_source",
 ]
 
 
@@ -419,3 +420,115 @@ def process_interface_data(
                 "data_prod_pk": str(existing.pk) if existing else "unknown",
                 "source_uri": source_uri,
             }
+
+
+def add_tel_file_source(
+    master: str,
+    obsnum: int,
+    subobsnum: int,
+    scannum: int,
+    data_prod_pk: int,
+    tolteca_db,
+    location,
+) -> dict:
+    """Add tel file as an additional source to existing DataProd.
+
+    Parameters
+    ----------
+    master : str
+        Master instrument (e.g., "tcs")
+    obsnum : int
+        Observation number
+    subobsnum : int
+        Sub-observation number
+    scannum : int
+        Scan number
+    data_prod_pk : int
+        DataProd primary key to add source to
+    tolteca_db : ToltecaDBResource
+        Resource for writing to tolteca_db
+    location : LocationConfig
+        Location configuration with data_root
+
+    Returns
+    -------
+    dict
+        Result with keys:
+        - added: bool (True if added, False if already exists)
+        - source_uri: str (tel file URI)
+        - status: str ("success")
+    """
+    from pathlib import Path
+    from sqlalchemy import select
+    from tolteca_db.models.orm import DataProdSource, Location as LocationORM
+    from tolteca_db.models.metadata import TelInterfaceMeta
+
+    # Get data root from location config
+    data_root = location.get_data_root()
+    if data_root is None:
+        return {"added": False, "source_uri": None, "status": "no_data_root"}
+
+    # Construct tel file path
+    # Format: tel_toltec_YYYY-MM-DD_OBSNUM_SUBOBS_SCAN.nc
+    # The tel files are in data_root/../tel/ directory
+    tel_dir = Path(data_root).parent.parent / "tel"
+    
+    # Search for tel file matching the quartet
+    import glob
+    pattern = f"tel_toltec_*_{obsnum:06d}_{subobsnum:02d}_{scannum:04d}.nc"
+    tel_files = list(tel_dir.glob(pattern))
+    
+    if not tel_files:
+        return {"added": False, "source_uri": None, "status": "tel_file_not_found"}
+    
+    tel_file_path = tel_files[0]  # Use first match
+    
+    # Create TelInterfaceMeta
+    tel_meta = TelInterfaceMeta(
+        obsnum=obsnum,
+        subobsnum=subobsnum,
+        scannum=scannum,
+        master=master,
+        interface="tel_toltec",
+    )
+    
+    # Calculate relative URI
+    location_root = Path(data_root).parent
+    try:
+        rel_path = tel_file_path.relative_to(location_root)
+        source_uri = str(rel_path)
+    except ValueError:
+        # Path not relative to location_root, use absolute
+        source_uri = str(tel_file_path)
+    
+    # Add DataProdSource
+    with tolteca_db.get_session() as session:
+        # Check if source already exists
+        stmt = select(DataProdSource).where(DataProdSource.source_uri == source_uri)
+        existing = session.scalar(stmt)
+        
+        if existing:
+            return {"added": False, "source_uri": source_uri, "status": "already_exists"}
+        
+        # Get location_fk
+        stmt = select(LocationORM).where(LocationORM.label == location.location_name)
+        location_orm = session.scalar(stmt)
+        
+        if not location_orm:
+            return {"added": False, "source_uri": source_uri, "status": "location_not_found"}
+        
+        # Create new source
+        tel_source = DataProdSource(
+            source_uri=source_uri,
+            data_prod_fk=data_prod_pk,
+            location_fk=location_orm.pk,
+            role="METADATA",
+            meta=tel_meta,
+            availability_state="ONLINE",
+            size=tel_file_path.stat().st_size if tel_file_path.exists() else None,
+        )
+        
+        session.add(tel_source)
+        session.commit()
+    
+    return {"added": True, "source_uri": source_uri, "status": "success"}
