@@ -46,8 +46,9 @@ def dev(
             raise typer.Exit(1)
 
         console.print(f"[green]Loading environment from: {env_file}[/green]")
-        # Use python-dotenv for proper variable substitution
-        load_dotenv(env_file, override=True)
+        # Use python-dotenv with interpolation for proper variable substitution
+        # interpolate=True enables ${VAR} expansion within the .env file
+        load_dotenv(env_file, override=True, interpolate=True)
 
     # Display configuration
     console.print("\n[bold]Configuration:[/bold]")

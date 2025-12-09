@@ -470,8 +470,10 @@ def add_tel_file_source(
 
     # Construct tel file path
     # Format: tel_toltec_YYYY-MM-DD_OBSNUM_SUBOBS_SCAN.nc
-    # The tel files are in data_root/../tel/ directory
-    tel_dir = Path(data_root).parent.parent / "tel"
+    # The tel files are in data_lmt/tel/ directory
+    # data_root from location config is: /path/to/data_lmt (TOLTECA_WEB_DATA_LMT_ROOTPATH)
+    # We need: /path/to/data_lmt/tel
+    tel_dir = Path(data_root) / "tel"
     
     # Search for tel file matching the quartet
     import glob
@@ -492,8 +494,11 @@ def add_tel_file_source(
         interface="tel_toltec",
     )
     
-    # Calculate relative URI
-    location_root = Path(data_root).parent
+    # Calculate relative URI from location root
+    # Location root is at data_lmt level (from TOLTECA_WEB_DATA_LMT_ROOTPATH)
+    # Tel file is at data_lmt/tel/tel_toltec_*.nc
+    # So relative URI should be: tel/tel_toltec_*.nc
+    location_root = Path(data_root)
     try:
         rel_path = tel_file_path.relative_to(location_root)
         source_uri = str(rel_path)
@@ -510,8 +515,8 @@ def add_tel_file_source(
         if existing:
             return {"added": False, "source_uri": source_uri, "status": "already_exists"}
         
-        # Get location_fk
-        stmt = select(LocationORM).where(LocationORM.label == location.location_name)
+        # Get location_fk using location_pk (label) from config
+        stmt = select(LocationORM).where(LocationORM.label == location.location_pk)
         location_orm = session.scalar(stmt)
         
         if not location_orm:

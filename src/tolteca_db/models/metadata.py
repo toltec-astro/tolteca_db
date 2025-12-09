@@ -17,7 +17,7 @@ from adaptix import Retort
 from adaptix.integrations.sqlalchemy import AdaptixJSON
 from sqlalchemy.types import JSON
 
-from tolteca_db.constants import DataProdType
+from tolteca_db.constants import DataProdType, ToltecDataKind
 
 # Global retort for adaptix conversions across all ORM models
 # Used by AdaptixJSON in data_prod.py and source.py
@@ -401,6 +401,11 @@ class RoachInterfaceMeta(ObsIdMixin, RoachMetaMixin):
     
     Attributes
     ----------
+    data_kind : int | None
+        ToltecDataKind flag value (inherited from parent DataProd)
+    type : Literal["roach"]
+        Type discriminator for adaptix union handling
+    
     (Inherited from ObsIdMixin)
     obsnum : int
         Observation number
@@ -429,6 +434,9 @@ class RoachInterfaceMeta(ObsIdMixin, RoachMetaMixin):
     
     # Explicit type discriminator for adaptix union handling
     type: Literal["roach"] = "roach"
+    
+    # Data kind inherited from parent DataProd
+    data_kind: int | None = None
 
 
 @dataclass
@@ -452,7 +460,11 @@ class TelInterfaceMeta(ObsIdMixin, TelMetaMixin):
 
     Attributes
     ----------
-    interface : str
+    data_kind : int
+        ToltecDataKind flag value (ToltecDataKind.LmtTel for tel files)
+    type : Literal["tel"]
+        Type discriminator for adaptix union handling
+    interface : Literal["tel_toltec"]
         Interface identifier (always "tel_toltec")
     receiver : str
         Receiver name (always "Toltec")
@@ -476,6 +488,9 @@ class TelInterfaceMeta(ObsIdMixin, TelMetaMixin):
 
     # Explicit type discriminator for adaptix union handling
     type: Literal["tel"] = "tel"
+
+    # Data kind for tel files
+    data_kind: int = field(default_factory=lambda: ToltecDataKind.LmtTel.value)
 
     # Interface identifiers (Literal type for union discrimination)
     interface: Literal["tel_toltec"] = "tel_toltec"

@@ -259,6 +259,7 @@ def process_interface(
             "status": "success",
             "rows_processed": result.get("rows_processed", 0),
             "duration_seconds": result.get("duration_seconds", 0),
+            "data_prod_pk": result.get("data_prod_pk"),  # Forward data_prod_pk for tel file processing
             "error": None,
         }
 

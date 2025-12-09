@@ -128,19 +128,9 @@ def populate_registry_tables(session: Session) -> dict[str, int]:
             session.add(new_flag)
             counts["flag"] += 1
     
-    # Populate Location (default LMT location)
-    stmt = select(Location).where(Location.label == "LMT")
-    existing = session.scalar(stmt)
-    if not existing:
-        new_location = Location(
-            label="LMT",
-            location_type="filesystem",
-            root_uri="file:///data/lmt",
-            priority=1,
-            meta={"site": "Large Millimeter Telescope", "country": "Mexico"},
-        )
-        session.add(new_location)
-        counts["location"] += 1
+    # Note: Location table is not populated here - it should be populated by
+    # the application layer (e.g., tolteca_web or dagster resource) since it
+    # requires application-specific configuration (root paths, etc.)
     
     session.commit()
     return counts

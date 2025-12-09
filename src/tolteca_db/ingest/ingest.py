@@ -376,6 +376,7 @@ class DataIngestor:
             roach=file_info.roach,
             nw_id=self.nw_id,
             interface=file_info.interface,
+            data_kind=file_info.data_kind.value if file_info.data_kind else None,
         )
         
         # Create DataProdSource

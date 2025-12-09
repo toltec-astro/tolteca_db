@@ -130,3 +130,6 @@ class ToltecDataKind(Flag):
 
     # Nominal observation mode
     RawTimeStream = auto()  # Science timestream data
+    
+    # Telescope metadata
+    LmtTel = auto()         # LMT telescope interface data (tel_toltec)
