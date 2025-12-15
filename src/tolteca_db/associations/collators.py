@@ -272,7 +272,7 @@ class CollateByConsecutiveObsnum(CollatorBase):
     obs_goal_filter: ClassVar[tuple[str, ...]]  # Allowed obs_goal values
 
     def _filter_items(self, observations: list) -> list:
-        """Filter observations by obs_goal.
+        """Filter observations by obs_goal (case-insensitive).
         
         Parameters
         ----------
@@ -290,7 +290,7 @@ class CollateByConsecutiveObsnum(CollatorBase):
                 continue
             
             obs_goal = getattr(obs.meta, 'obs_goal', None)
-            if obs_goal in self.obs_goal_filter:
+            if obs_goal and obs_goal.lower() in self.obs_goal_filter:
                 filtered.append(obs)
         
         return filtered

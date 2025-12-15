@@ -11,7 +11,9 @@ from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
+from tolteca_db.constants import ToltecDataKind
 from tolteca_db.models.metadata import RawObsMeta
 from tolteca_db.models.orm import DataProd, DataProdSource, Location
 
@@ -185,8 +187,8 @@ class TelCSVIngestor:
                             m2_offset_mm=tel_meta.m2_offset_mm,
                             tau=tel_meta.tau,
                             crane_in_beam=tel_meta.crane_in_beam,
-                            # RawObsMeta-specific (no data_kind yet)
-                            data_kind=0,
+                            # RawObsMeta-specific: tel_toltec interface = LmtTel data_kind
+                            data_kind=ToltecDataKind.LmtTel.value,
                         ),
                     )
                     self.session.add(data_prod)
@@ -211,6 +213,15 @@ class TelCSVIngestor:
                     data_prod.meta.m2_offset_mm = tel_meta.m2_offset_mm
                     data_prod.meta.tau = tel_meta.tau
                     data_prod.meta.crane_in_beam = tel_meta.crane_in_beam
+                    
+                    # UNION data_kind: combine existing data_kind with LmtTel flag
+                    # Example: Timestream (4) | LmtTel (16) = 20
+                    existing_data_kind = data_prod.meta.data_kind or 0
+                    data_prod.meta.data_kind = existing_data_kind | ToltecDataKind.LmtTel.value
+                    
+                    # Mark meta as modified so SQLAlchemy detects the change
+                    flag_modified(data_prod, 'meta')
+                    
                     stats.data_prods_updated += 1
                 
                 # Check if tel source already exists

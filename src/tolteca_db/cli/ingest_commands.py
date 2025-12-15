@@ -779,3 +779,248 @@ def from_tel_csv(
     
     if stats.rows_skipped > 0 and skip_existing:
         console.print(f"[dim]Note:[/dim] Skipped {stats.rows_skipped} rows (no matching DataProd or already exists)")
+
+
+@ingest_app.command(name="from-tel-files")
+def from_tel_files(
+    data_root: Annotated[
+        Path,
+        typer.Argument(help="Root directory containing tel .nc files (e.g., data_lmt/tel)"),
+    ],
+    location: Annotated[
+        str,
+        typer.Option("--location", "-l", help="Location label for tel files"),
+    ] = "LMT",
+    location_root: Annotated[
+        Optional[Path],
+        typer.Option("--location-root", help="Location root path (for source_uri calculation, defaults to --data-root)"),
+    ] = None,
+    master: Annotated[
+        str,
+        typer.Option("--master", help="Master identifier (tcs/ics)"),
+    ] = "tcs",
+    pattern: Annotated[
+        str,
+        typer.Option("--pattern", "-p", help="File glob pattern"),
+    ] = "tel_*.nc",
+    skip_existing: Annotated[
+        bool,
+        typer.Option("--skip-existing/--no-skip-existing", help="Skip files already in database"),
+    ] = True,
+    create_data_prods: Annotated[
+        bool,
+        typer.Option("--create-data-prods/--no-create-data-prods", help="Create DataProd entries if they don't exist"),
+    ] = True,
+    db_url: Annotated[
+        Optional[str],
+        typer.Option("--db", help="Database URL"),
+    ] = None,
+    commit_interval: Annotated[
+        int,
+        typer.Option("--commit-interval", help="Commit every N files"),
+    ] = 100,
+) -> None:
+    """
+    Ingest physical tel .nc files from filesystem.
+    
+    Scans the tel directory for physical .nc files, parses filenames,
+    and creates DataProdSource entries pointing to the files. Links to
+    existing DataProds (created by CSV or roach ingestion) or optionally
+    creates new ones.
+    
+    Tel file format: tel_{instrument}_{YYYY-MM-DD}_{obsnum}_{subobsnum}_{scannum}.nc
+    Examples:
+        - tel_toltec_2024-03-19_113515_00_0001.nc
+        - tel_muscat_2025-10-31_145476_00_0001.nc
+    
+    The --data-root specifies where to find the tel files on the current system.
+    The --location-root (defaults to --data-root) specifies the root path that
+    will be stored in the Location.root_uri for computing relative paths.
+    
+    Examples:
+        # Ingest all tel files
+        tolteca_db ingest from-tel-files run/data_lmt/tel \\
+            --location LMT \\
+            --db "duckdb:///tolteca.duckdb"
+        
+        # Different location root for relative paths
+        tolteca_db ingest from-tel-files /local/scratch/tel \\
+            --location-root /data_lmt/tel \\
+            --location LMT_scratch
+    """
+    from tolteca_db.db import get_engine
+    from sqlalchemy.orm import Session
+    from tolteca_db.models.orm import Location, DataProd, DataProdSource
+    from tolteca_db.ingest import FileScanner, guess_info_from_file
+    from tolteca_db.models.metadata import TelInterfaceMeta, RawObsMeta
+    from tolteca_db.constants import ToltecDataKind, DataProdType
+    from sqlalchemy import select
+    from dataclasses import asdict
+    from rich.progress import Progress
+    import os
+    
+    if not data_root.exists():
+        console.print(f"[red]Error:[/red] data_root not found: {data_root}")
+        raise typer.Exit(code=1)
+    
+    # Use absolute path
+    data_root = Path(os.path.normpath(data_root.absolute()))
+    
+    # Use data_root as location_root if not specified
+    if location_root is None:
+        location_root = data_root
+    else:
+        location_root = Path(os.path.normpath(location_root.absolute()))
+    
+    console.print(f"[bold blue]Ingesting Tel Files:[/bold blue] {data_root}")
+    console.print(f"Location root: {location_root}")
+    console.print(f"Location: {location}, Master: {master}\n")
+    
+    # Scan for tel files
+    scanner = FileScanner(root_path=data_root, pattern=pattern, recursive=False)
+    files = scanner.scan_to_list()
+    
+    console.print(f"Found {len(files)} tel files\n")
+    
+    if not files:
+        console.print("[yellow]No tel files found[/yellow]")
+        return
+    
+    engine = get_engine(db_url)
+    
+    with Session(engine) as session:
+        # Get or verify location exists
+        stmt = select(Location).where(Location.label == location)
+        loc = session.execute(stmt).scalar_one_or_none()
+        
+        if loc is None:
+            console.print(f"[red]Error:[/red] Location '{location}' not found. Create it first.")
+            console.print("[yellow]Hint:[/yellow] Use 'tolteca_db db init' to create locations")
+            raise typer.Exit(code=1)
+        
+        # Verify root_uri matches
+        expected_root = f"file://{location_root}"
+        if loc.root_uri != expected_root:
+            console.print(f"[yellow]Warning:[/yellow] Location root_uri mismatch:")
+            console.print(f"  Expected: {expected_root}")
+            console.print(f"  Actual:   {loc.root_uri}")
+            console.print(f"  Files will be stored relative to: {loc.root_uri}")
+        
+        ingested = 0
+        skipped = 0
+        failed = 0
+        data_prods_created = 0
+        
+        with Progress() as progress:
+            task = progress.add_task("[cyan]Ingesting tel files...", total=len(files))
+            
+            for file_info in files:
+                try:
+                    # Check if source already exists
+                    if skip_existing:
+                        # Compute relative path for source_uri
+                        file_path = Path(file_info.filepath)
+                        try:
+                            rel_path = file_path.relative_to(location_root)
+                            source_uri = str(rel_path)
+                        except ValueError:
+                            # File is outside location_root, use absolute path
+                            source_uri = str(file_path)
+                        
+                        stmt = select(DataProdSource).where(
+                            DataProdSource.source_uri == source_uri,
+                            DataProdSource.location_fk == loc.pk,
+                        )
+                        existing = session.execute(stmt).scalar_one_or_none()
+                        
+                        if existing:
+                            skipped += 1
+                            progress.update(task, advance=1)
+                            continue
+                    
+                    # Find or create matching DataProd
+                    stmt = (
+                        select(DataProd)
+                        .where(DataProd.data_prod_type_fk == 1)  # dp_raw_obs
+                        .where(DataProd.meta["obsnum"].as_integer() == file_info.obsnum)
+                        .where(DataProd.meta["subobsnum"].as_integer() == file_info.subobsnum)
+                        .where(DataProd.meta["scannum"].as_integer() == file_info.scannum)
+                        .where(DataProd.meta["master"].as_string() == master)
+                    )
+                    data_prod = session.execute(stmt).scalar_one_or_none()
+                    
+                    if data_prod is None:
+                        if not create_data_prods:
+                            skipped += 1
+                            progress.update(task, advance=1)
+                            continue
+                        
+                        # Create new DataProd with proper RawObsMeta
+                        name = f"{master}-{file_info.obsnum}-{file_info.subobsnum}-{file_info.scannum}"
+                        
+                        data_prod = DataProd(
+                            data_prod_type_fk=1,  # dp_raw_obs
+                            meta=RawObsMeta(
+                                name=name,
+                                data_prod_type=DataProdType.DP_RAW_OBS,
+                                obsnum=file_info.obsnum,
+                                subobsnum=file_info.subobsnum,
+                                scannum=file_info.scannum,
+                                master=master,
+                                data_kind=ToltecDataKind.LmtTel.value,  # Tel files have LmtTel data_kind
+                            ),
+                        )
+                        session.add(data_prod)
+                        session.flush()
+                        data_prods_created += 1
+                    
+                    # Create tel interface metadata
+                    tel_meta = TelInterfaceMeta(
+                        obsnum=file_info.obsnum,
+                        subobsnum=file_info.subobsnum,
+                        scannum=file_info.scannum,
+                        master=master,
+                        interface=file_info.interface,
+                    )
+                    
+                    # Compute relative path for source_uri
+                    file_path = Path(file_info.filepath)
+                    try:
+                        rel_path = file_path.relative_to(location_root)
+                        source_uri = str(rel_path)
+                    except ValueError:
+                        # File is outside location_root, use absolute path
+                        source_uri = str(file_path)
+                    
+                    # Create DataProdSource
+                    source = DataProdSource(
+                        source_uri=source_uri,
+                        data_prod_fk=data_prod.pk,
+                        location_fk=loc.pk,
+                        role="DATA",
+                        availability_state="available",
+                        meta=tel_meta,  # AdaptixJSON handles dataclass serialization
+                    )
+                    session.add(source)
+                    
+                    ingested += 1
+                    
+                    # Commit periodically
+                    if ingested % commit_interval == 0:
+                        session.commit()
+                
+                except Exception as e:
+                    console.print(f"[red]Error ingesting {Path(file_info.filepath).name}:[/red] {e}")
+                    failed += 1
+                
+                progress.update(task, advance=1)
+        
+        # Final commit
+        session.commit()
+        
+        # Summary
+        console.print(f"\n[green]✓[/green] Tel file ingestion complete:")
+        console.print(f"  Ingested: {ingested}")
+        console.print(f"  Skipped (existing): {skipped}")
+        console.print(f"  Failed: {failed}")
+        console.print(f"  DataProds Created: {data_prods_created}")

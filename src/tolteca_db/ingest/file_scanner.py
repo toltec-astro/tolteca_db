@@ -76,11 +76,27 @@ TOLTEC_FILENAME_PATTERN = re.compile(
     r"\.(?P<ext>\w+)$"
 )
 
+# Tel filename pattern (date-first format)
+# Format: tel_{instrument}_{YYYY-MM-DD}_{obsnum}_{subobsnum}_{scannum}.nc
+# Examples:
+#   tel_toltec_2024-03-19_113515_00_0001.nc
+#   tel_muscat_2025-10-31_145476_00_0001.nc
+
+TEL_FILENAME_PATTERN = re.compile(
+    r"tel_(?P<instrument>\w+)"
+    r"_(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})"
+    r"_(?P<obsnum>\d+)"
+    r"_(?P<subobsnum>\d+)"
+    r"_(?P<scannum>\d+)"
+    r"\.(?P<ext>\w+)$"
+)
+
 
 def guess_info_from_file(filepath: str | Path) -> ParsedFileInfo | None:
     """Parse TolTEC filename and extract metadata.
     
-    Supports tolteca_v2 filename patterns for raw observation files.
+    Supports tolteca_v2 filename patterns for raw observation files,
+    including tel files with date-first format.
     
     Parameters
     ----------
@@ -107,11 +123,51 @@ def guess_info_from_file(filepath: str | Path) -> ParsedFileInfo | None:
     'hwp'
     >>> info.roach
     None
+    
+    >>> info = guess_info_from_file("tel_toltec_2024-03-19_113515_00_0001.nc")
+    >>> info.interface
+    'tel_toltec'
+    >>> info.obsnum
+    113515
     """
     path = Path(filepath)
     filename = path.name
     
-    # Match filename pattern
+    # Try tel pattern first (has more specific format)
+    match = TEL_FILENAME_PATTERN.match(filename)
+    if match:
+        d = match.groupdict()
+        interface = f"tel_{d['instrument']}"
+        
+        # Parse date if available
+        obs_datetime = None
+        if d['year'] and d['month'] and d['day']:
+            try:
+                obs_datetime = datetime(
+                    int(d['year']),
+                    int(d['month']),
+                    int(d['day'])
+                )
+            except (ValueError, TypeError):
+                pass
+        
+        # Tel files always have data_kind = LmtTel
+        data_kind = ToltecDataKind.LmtTel
+        
+        return ParsedFileInfo(
+            filepath=str(path),
+            interface=interface,
+            roach=None,
+            obsnum=int(d['obsnum']),
+            subobsnum=int(d['subobsnum']),
+            scannum=int(d['scannum']),
+            obs_datetime=obs_datetime,
+            file_suffix=None,
+            file_ext=d['ext'],
+            data_kind=data_kind,
+        )
+    
+    # Try standard toltec pattern
     match = TOLTEC_FILENAME_PATTERN.match(filename)
     if not match:
         return None
@@ -132,8 +188,8 @@ def guess_info_from_file(filepath: str | Path) -> ParsedFileInfo | None:
         except ValueError:
             pass
     
-    # Infer data kind from suffix
-    data_kind = _infer_data_kind(file_suffix)
+    # Infer data kind from suffix, interface, and extension
+    data_kind = _infer_data_kind(file_suffix, interface, file_ext)
     
     return ParsedFileInfo(
         filepath=path,
@@ -149,34 +205,44 @@ def guess_info_from_file(filepath: str | Path) -> ParsedFileInfo | None:
     )
 
 
-def _infer_data_kind(file_suffix: str | None) -> ToltecDataKind | None:
-    """Infer ToltecDataKind from file suffix.
+def _infer_data_kind(file_suffix: str | None, interface: str | None, file_ext: str | None) -> ToltecDataKind | None:
+    """Infer ToltecDataKind from file suffix, interface, and extension.
     
     Parameters
     ----------
     file_suffix : str | None
         File suffix (timestream, targsweep, etc.)
+    interface : str | None
+        Interface name (toltec0, toltec1, etc.)
+    file_ext : str | None
+        File extension (.nc, .txt, etc.)
     
     Returns
     -------
     ToltecDataKind | None
         Inferred data kind, None if cannot determine
     """
-    if not file_suffix:
-        return None
+    # Handle case where suffix exists
+    if file_suffix:
+        suffix_lower = file_suffix.lower()
+        
+        # Map suffix to data kind
+        suffix_map = {
+            "timestream": ToltecDataKind.RawTimeStream,
+            "targetsweep": ToltecDataKind.TargetSweep,
+            "targsweep": ToltecDataKind.TargetSweep,
+            "vnasweep": ToltecDataKind.VnaSweep,
+            "tune": ToltecDataKind.Tune,
+        }
+        
+        return suffix_map.get(suffix_lower)
     
-    suffix_lower = file_suffix.lower()
+    # Handle case where no suffix: roach .nc files default to RawTimeStream
+    # Following tolteca pattern: (r"toltec(\d+)", None, ".nc"): _T.RawTimeStream
+    if interface and interface.startswith("toltec") and file_ext == "nc":
+        return ToltecDataKind.RawTimeStream
     
-    # Map suffix to data kind
-    suffix_map = {
-        "timestream": ToltecDataKind.RawTimeStream,
-        "targetsweep": ToltecDataKind.TargetSweep,
-        "targsweep": ToltecDataKind.TargetSweep,
-        "vnasweep": ToltecDataKind.VnaSweep,
-        "tune": ToltecDataKind.Tune,
-    }
-    
-    return suffix_map.get(suffix_lower)
+    return None
 
 
 class FileScanner:
