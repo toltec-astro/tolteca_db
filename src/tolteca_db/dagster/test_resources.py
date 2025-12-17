@@ -39,8 +39,15 @@ class SimulatorConfig(ConfigurableResource):
         Simulated integration time (period of simulator execution)
     enabled : bool
         Whether simulator should run
+    date_filter : str | None
+        Optional date to simulate (format: YYYY-MM-DD). If provided, queries all ObsNums for this date.
     obsnum_filter : list[int] | None
-        Optional list of ObsNums to simulate (for testing specific observations)
+        Optional list of ObsNums to simulate (for testing specific observations).
+        Overrides date_filter if both are provided.
+    source_csv_path : str | None
+        Path to source lmtmc CSV file (full dataset)
+    test_csv_path : str | None
+        Path to test lmtmc CSV file (simulator writes filtered rows here)
     """
 
     integration_time_seconds: float = Field(
@@ -51,10 +58,64 @@ class SimulatorConfig(ConfigurableResource):
         default=True,
         description="Whether simulator is enabled",
     )
+    date_filter: str | None = Field(
+        default=None,
+        description="Optional date to simulate (format: YYYY-MM-DD)",
+    )
     obsnum_filter: list[int] | None = Field(
         default=None,
-        description="Optional list of specific ObsNums to simulate",
+        description="Optional list of specific ObsNums to simulate (overrides date_filter)",
     )
+    source_csv_path: str | None = Field(
+        default=None,
+        description="Path to source lmtmc CSV (full dataset)",
+    )
+    test_csv_path: str | None = Field(
+        default=None,
+        description="Path to test lmtmc CSV (simulator output)",
+    )
+    
+    def resolve_obsnum_filter(self, source_db_url: str) -> list[int] | None:
+        """Resolve obsnum_filter from date_filter if needed.
+        
+        Parameters
+        ----------
+        source_db_url : str
+            URL of source database to query for date filtering
+            
+        Returns
+        -------
+        list[int] | None
+            Resolved list of ObsNums, or None if no filter
+        """
+        # If explicit obsnum_filter provided, use it (takes precedence)
+        if self.obsnum_filter:
+            return self.obsnum_filter
+        
+        # If date_filter provided, query source database
+        if self.date_filter:
+            from sqlalchemy import create_engine, text
+            from sqlalchemy.orm import Session
+            
+            engine = create_engine(source_db_url)
+            with Session(engine) as session:
+                result = session.execute(
+                    text("""
+                        SELECT DISTINCT ObsNum 
+                        FROM toltec 
+                        WHERE Date = :date
+                        ORDER BY ObsNum
+                    """),
+                    {"date": self.date_filter}
+                ).fetchall()
+                
+                if result:
+                    obsnum_list = [row[0] for row in result]
+                    return obsnum_list
+            
+            engine.dispose()
+        
+        return None
 
 
 class TestToltecDBResource(ConfigurableResource):

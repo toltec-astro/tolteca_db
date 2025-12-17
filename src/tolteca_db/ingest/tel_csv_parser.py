@@ -31,12 +31,18 @@ class TelCSVRow:
         Sub-observation number (extracted from ObsNum column)
     scannum : int
         Scan number (extracted from ObsNum column)
+    filename : str
+        Filename of tel .nc file (from FileName column)
+    valid : bool
+        Validation status (from Valid column)
     """
     
     tel_metadata: TelInterfaceMeta
     obsnum: int
     subobsnum: int
     scannum: int
+    filename: str
+    valid: bool
     
     @classmethod
     def from_csv_row(cls, row: dict[str, str]) -> TelCSVRow:
@@ -121,11 +127,17 @@ class TelCSVRow:
             valid=bool(int(row["Valid"])),
         )
         
+        # Extract filename and valid from CSV
+        filename = row["FileName"]
+        valid = bool(int(row["Valid"]))
+        
         return cls(
             tel_metadata=tel_meta,
             obsnum=obsnum,
             subobsnum=subobsnum,
             scannum=scannum,
+            filename=filename,
+            valid=valid,
         )
 
 

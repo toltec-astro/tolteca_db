@@ -345,12 +345,14 @@ def collect_results(
             break
     
     if data_prod_pk:
-        from .helpers import add_tel_file_source
+        from .helpers import add_tel_csv_metadata
         
         tolteca_db = context.resources.tolteca_db
         location = context.resources.location
         
-        tel_result = add_tel_file_source(
+        # Add tel CSV metadata (from test_lmtmc.csv)
+        # This now includes file paths from the CSV's FileName column
+        csv_result = add_tel_csv_metadata(
             master=metadata.master,
             obsnum=metadata.obsnum,
             subobsnum=metadata.subobsnum,
@@ -360,14 +362,15 @@ def collect_results(
             location=location,
         )
         
-        if tel_result["added"]:
-            context.log.info(f"✓ Added tel file: {tel_result['source_uri']}")
-        elif tel_result["status"] == "tel_file_not_found":
-            context.log.warning(f"⚠ Tel file not found for quartet {quartet_key}")
-        elif tel_result["status"] == "already_exists":
-            context.log.info(f"Tel file already exists: {tel_result['source_uri']}")
+        if csv_result["added"]:
+            context.log.info(f"✓ Added tel CSV metadata: {csv_result['source_uri']}")
+        elif csv_result["status"] == "csv_row_not_found":
+            context.log.warning(f"⚠ Tel CSV row not found for quartet {quartet_key}")
+        elif csv_result["status"] == "already_exists":
+            context.log.debug(f"Tel CSV metadata already exists: {csv_result['source_uri']}")
         else:
-            context.log.warning(f"Tel file not added: {tel_result['status']}")
+            context.log.warning(f"Tel CSV metadata not added: {csv_result['status']}")
+
 
     return QuartetResult(
         quartet_key=quartet_key,

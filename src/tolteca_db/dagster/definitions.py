@@ -118,8 +118,11 @@ def get_definitions(test_mode: bool = False) -> Definitions:
 def get_test_definitions(
     source_db_url: str = "sqlite:///../run/toltecdb_last_30days.sqlite",
     integration_time_seconds: float = 5.0,
+    date_filter: str | None = None,
     obsnum_filter: list[int] | None = None,
     data_root: str | None = None,
+    source_csv_path: str | None = None,
+    test_csv_path: str | None = None,
 ) -> Definitions:
     """
     Create test Dagster definitions with simulator for testing.
@@ -130,10 +133,16 @@ def get_test_definitions(
         URL of source database to copy quartets from
     integration_time_seconds : float
         Simulated integration time between simulator ticks
+    date_filter : str | None
+        Optional date to simulate (format: YYYY-MM-DD)
     obsnum_filter : list[int] | None
-        Optional list of specific ObsNums to simulate (for testing)
+        Optional list of specific ObsNums to simulate (overrides date_filter)
     data_root : str | None
         Path to data root directory for file storage
+    source_csv_path : str | None
+        Path to source lmtmc CSV (full dataset)
+    test_csv_path : str | None
+        Path to test lmtmc CSV (simulator output)
 
     Returns
     -------
@@ -176,7 +185,10 @@ def get_test_definitions(
         "simulator": SimulatorConfig(
             integration_time_seconds=integration_time_seconds,
             enabled=True,
+            date_filter=date_filter,
             obsnum_filter=obsnum_filter,
+            source_csv_path=source_csv_path,
+            test_csv_path=test_csv_path,
         ),
     }
 
@@ -219,11 +231,28 @@ if _obsnum_filter_str:
     except ValueError:
         pass  # Invalid format, use None
 
+# Get date filter from environment (format: YYYY-MM-DD)
+_date_filter = EnvVar("TOLTECA_SIMULATOR_DATE").get_value("")
+if not _date_filter:
+    _date_filter = None
+
+# Get CSV paths from environment
+_source_csv_path = EnvVar("LMTMC_CSV_SOURCE").get_value("")
+if not _source_csv_path:
+    _source_csv_path = None
+
+_test_csv_path = EnvVar("LMTMC_CSV_TEST").get_value("")
+if not _test_csv_path:
+    _test_csv_path = None
+
 defs = get_test_definitions(
     source_db_url=EnvVar("TOLTEC_DB_SOURCE_URL").get_value(
         "sqlite:///../run/toltecdb_last_30days.sqlite"
     ),
     integration_time_seconds=float(EnvVar("TOLTECA_SIMULATOR_INTEGRATION_TIME").get_value("15.0")),
+    date_filter=_date_filter,
     obsnum_filter=_obsnum_filter,
     data_root=EnvVar("TOLTECA_WEB_DATA_LMT_ROOTPATH").get_value(None),
+    source_csv_path=_source_csv_path,
+    test_csv_path=_test_csv_path,
 )

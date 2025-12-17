@@ -16,7 +16,7 @@ __all__ = [
     "query_toltec_db_since",
     "query_quartet_status",
     "process_interface_data",
-    "add_tel_file_source",
+    "add_tel_csv_metadata",
 ]
 
 
@@ -422,7 +422,7 @@ def process_interface_data(
             }
 
 
-def add_tel_file_source(
+def add_tel_csv_metadata(
     master: str,
     obsnum: int,
     subobsnum: int,
@@ -431,7 +431,12 @@ def add_tel_file_source(
     tolteca_db,
     location,
 ) -> dict:
-    """Add tel file as an additional source to existing DataProd.
+    """Add tel CSV metadata to existing DataProd using TelCSVIngestor.
+    
+    Reads test_lmtmc.csv and ingests matching tel metadata row.
+    
+    Uses unified CSV structure with FileName column to create file-based URIs
+    (e.g., tel/tel_toltec_*.nc) instead of virtual URIs (tel://*).
 
     Parameters
     ----------
@@ -448,92 +453,78 @@ def add_tel_file_source(
     tolteca_db : ToltecaDBResource
         Resource for writing to tolteca_db
     location : LocationConfig
-        Location configuration with data_root
+        Location configuration
 
     Returns
     -------
     dict
         Result with keys:
         - added: bool (True if added, False if already exists)
-        - source_uri: str (tel file URI)
-        - status: str ("success")
+        - source_uri: str (file-based URI like tel/tel_toltec_*.nc)
+        - status: str
     """
+    import os
     from pathlib import Path
     from sqlalchemy import select
-    from tolteca_db.models.orm import DataProdSource, Location as LocationORM
-    from tolteca_db.models.metadata import TelInterfaceMeta
-
-    # Get data root from location config
-    data_root = location.get_data_root()
-    if data_root is None:
-        return {"added": False, "source_uri": None, "status": "no_data_root"}
-
-    # Construct tel file path
-    # Format: tel_toltec_YYYY-MM-DD_OBSNUM_SUBOBS_SCAN.nc
-    # The tel files are in data_lmt/tel/ directory
-    # data_root from location config is: /path/to/data_lmt (TOLTECA_WEB_DATA_LMT_ROOTPATH)
-    # We need: /path/to/data_lmt/tel
-    tel_dir = Path(data_root) / "tel"
+    from tolteca_db.models.orm import DataProdSource, DataProd, Location as LocationORM
+    from tolteca_db.ingest.tel_ingestor import TelCSVIngestor
     
-    # Search for tel file matching the quartet
-    import glob
-    pattern = f"tel_toltec_*_{obsnum:06d}_{subobsnum:02d}_{scannum:04d}.nc"
-    tel_files = list(tel_dir.glob(pattern))
+    # Get test CSV path from environment
+    dagster_home = os.getenv("DAGSTER_HOME", ".dagster")
+    test_csv_path = Path(dagster_home) / "test_lmtmc.csv"
     
-    if not tel_files:
-        return {"added": False, "source_uri": None, "status": "tel_file_not_found"}
+    if not test_csv_path.exists():
+        return {"added": False, "source_uri": None, "status": "csv_not_found"}
     
-    tel_file_path = tel_files[0]  # Use first match
-    
-    # Create TelInterfaceMeta
-    tel_meta = TelInterfaceMeta(
-        obsnum=obsnum,
-        subobsnum=subobsnum,
-        scannum=scannum,
-        master=master,
-        interface="tel_toltec",
-    )
-    
-    # Calculate relative URI from location root
-    # Location root is at data_lmt level (from TOLTECA_WEB_DATA_LMT_ROOTPATH)
-    # Tel file is at data_lmt/tel/tel_toltec_*.nc
-    # So relative URI should be: tel/tel_toltec_*.nc
-    location_root = Path(data_root)
-    try:
-        rel_path = tel_file_path.relative_to(location_root)
-        source_uri = str(rel_path)
-    except ValueError:
-        # Path not relative to location_root, use absolute
-        source_uri = str(tel_file_path)
-    
-    # Add DataProdSource
     with tolteca_db.get_session() as session:
-        # Check if source already exists
-        stmt = select(DataProdSource).where(DataProdSource.source_uri == source_uri)
-        existing = session.scalar(stmt)
-        
-        if existing:
-            return {"added": False, "source_uri": source_uri, "status": "already_exists"}
-        
-        # Get location_fk using location_pk (label) from config
+        # Get location_fk
         stmt = select(LocationORM).where(LocationORM.label == location.location_pk)
         location_orm = session.scalar(stmt)
         
         if not location_orm:
-            return {"added": False, "source_uri": source_uri, "status": "location_not_found"}
+            return {"added": False, "source_uri": None, "status": "location_not_found"}
         
-        # Create new source
-        tel_source = DataProdSource(
-            source_uri=source_uri,
-            data_prod_fk=data_prod_pk,
-            location_fk=location_orm.pk,
-            role="METADATA",
-            meta=tel_meta,
-            availability_state="ONLINE",
-            size=tel_file_path.stat().st_size if tel_file_path.exists() else None,
+        # Check if DataProd already has tel source
+        # (tel sources have role="METADATA" and location matching tel location)
+        stmt = (
+            select(DataProdSource)
+            .where(DataProdSource.data_prod_fk == data_prod_pk)
+            .where(DataProdSource.role == "METADATA")
+            .where(DataProdSource.location_fk == location_orm.pk)
+        )
+        existing = session.scalar(stmt)
+        
+        if existing:
+            return {"added": False, "source_uri": existing.source_uri, "status": "already_exists"}
+        
+        # Use TelCSVIngestor to process CSV and create source
+        # Set skip_existing=False to ensure we process this quartet
+        # Set create_data_prods=False since DataProd already exists
+        ingestor = TelCSVIngestor(
+            session=session,
+            location_pk=location_orm.pk,
+            skip_existing=False,
+            create_data_prods=False,
+            commit_batch_size=1,
         )
         
-        session.add(tel_source)
-        session.commit()
-    
-    return {"added": True, "source_uri": source_uri, "status": "success"}
+        # Ingest the CSV - it will find matching row and update DataProd
+        stats = ingestor.ingest_csv(test_csv_path)
+        
+        if stats.sources_created > 0:
+            # Query the source that was just created to get its URI
+            stmt = (
+                select(DataProdSource)
+                .where(DataProdSource.data_prod_fk == data_prod_pk)
+                .where(DataProdSource.role == "METADATA")
+                .where(DataProdSource.location_fk == location_orm.pk)
+            )
+            created_source = session.scalar(stmt)
+            source_uri = created_source.source_uri if created_source else None
+            return {"added": True, "source_uri": source_uri, "status": "success"}
+        elif stats.rows_skipped > 0:
+            # Row was skipped (already exists or filtered out)
+            return {"added": False, "source_uri": None, "status": "already_exists"}
+        else:
+            # No matching row found in CSV
+            return {"added": False, "source_uri": source_uri, "status": "csv_row_not_found"}

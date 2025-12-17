@@ -55,8 +55,11 @@ def acquisition_simulator(context: AssetExecutionContext) -> Output[str]:
     if not simulator.enabled:
         return Output("Simulator disabled")
 
-    # Get obsnum filter if specified
-    obsnum_filter = simulator.obsnum_filter
+    # Resolve obsnum filter (from date_filter or explicit obsnum_filter)
+    obsnum_filter = simulator.resolve_obsnum_filter(toltec_db.source_db_url)
+    
+    if obsnum_filter and simulator.date_filter:
+        context.log.info(f"Resolved {len(obsnum_filter)} ObsNums from date filter: {simulator.date_filter}")
 
     with toltec_db.get_session() as session:
         # Check if db is empty or latest quartet entries are all Valid=1
@@ -77,7 +80,8 @@ def acquisition_simulator(context: AssetExecutionContext) -> Output[str]:
             # Database is empty - insert first quartet from source db
             context.log.info("Database empty - loading first quartet from source db")
             _insert_next_quartet_from_source_db(
-                context, session, toltec_db.source_db_url, obsnum_filter
+                context, session, toltec_db.source_db_url, obsnum_filter,
+                simulator.source_csv_path, simulator.test_csv_path
             )
             return Output("Inserted first quartet with Valid=0")
 
@@ -89,7 +93,8 @@ def acquisition_simulator(context: AssetExecutionContext) -> Output[str]:
                 f"{latest_quartet.ScanNum} all Valid=1 - loading next quartet"
             )
             _insert_next_quartet_from_source_db(
-                context, session, toltec_db.source_db_url, obsnum_filter
+                context, session, toltec_db.source_db_url, obsnum_filter,
+                simulator.source_csv_path, simulator.test_csv_path
             )
             return Output(
                 f"Inserted next quartet after completing {latest_quartet.ObsNum}-"
@@ -163,12 +168,16 @@ def _insert_next_quartet_from_source_db(
     test_session: Session,
     source_db_url: str,
     obsnum_filter: list[int] | None = None,
+    source_csv_path: str | None = None,
+    test_csv_path: str | None = None,
 ) -> None:
     """Insert next quartet from source database into test database.
 
     Selects the next distinct quartet (ObsNum, SubObsNum, ScanNum, Master)
     from source database that hasn't been inserted yet, and inserts all its
     interface entries with Valid=0.
+    
+    Also updates test lmtmc CSV with corresponding metadata rows if CSV paths provided.
 
     Parameters
     ----------
@@ -180,6 +189,10 @@ def _insert_next_quartet_from_source_db(
         URL of source database to copy from
     obsnum_filter : list[int] | None
         Optional list of specific ObsNums to simulate
+    source_csv_path : str | None
+        Path to source lmtmc CSV (full dataset)
+    test_csv_path : str | None
+        Path to test lmtmc CSV (simulator output)
     """
     from sqlalchemy import create_engine
 
@@ -282,5 +295,92 @@ def _insert_next_quartet_from_source_db(
             f"{next_quartet.ScanNum} with {len(interface_entries)} interfaces "
             f"(all Valid=0)"
         )
+        
+        # Update test CSV with tel metadata for this ObsNum
+        if source_csv_path and test_csv_path:
+            _update_test_csv_for_obsnum(
+                context, 
+                source_csv_path, 
+                test_csv_path, 
+                next_quartet.ObsNum
+            )
 
     source_engine.dispose()
+
+
+def _update_test_csv_for_obsnum(
+    context: AssetExecutionContext,
+    source_csv_path: str,
+    test_csv_path: str,
+    obsnum: int,
+) -> None:
+    """Update test lmtmc CSV with rows for the given ObsNum.
+    
+    Reads source CSV, filters for matching ObsNum, and appends to test CSV.
+    Creates test CSV with header if it doesn't exist.
+    
+    Parameters
+    ----------
+    context : AssetExecutionContext
+        Dagster execution context for logging
+    source_csv_path : str
+        Path to source lmtmc CSV (full dataset)
+    test_csv_path : str
+        Path to test lmtmc CSV (simulator output)
+    obsnum : int
+        ObsNum to copy rows for
+    """
+    import csv
+    from pathlib import Path
+    
+    source_path = Path(source_csv_path)
+    test_path = Path(test_csv_path)
+    
+    if not source_path.exists():
+        context.log.warning(f"Source CSV not found: {source_csv_path}")
+        return
+    
+    # Read matching rows from source CSV
+    matching_rows = []
+    header = None
+    
+    with source_path.open("r") as f:
+        reader = csv.DictReader(f)
+        header = reader.fieldnames
+        
+        for row in reader:
+            # Parse ObsNum.SubObsNum.ScanNum format (e.g., "18851.0.0")
+            obsnum_str = row.get("ObsNum", "")
+            if not obsnum_str:
+                continue
+            
+            # Extract ObsNum from "XXXXX.Y.Z" format
+            parts = obsnum_str.split(".")
+            if not parts:
+                continue
+            
+            try:
+                row_obsnum = int(float(parts[0]))
+                if row_obsnum == obsnum:
+                    matching_rows.append(row)
+            except (ValueError, IndexError):
+                continue
+    
+    if not matching_rows:
+        context.log.warning(f"No CSV rows found for ObsNum {obsnum}")
+        return
+    
+    # Create test CSV with header if it doesn't exist
+    file_exists = test_path.exists()
+    
+    with test_path.open("a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=header)
+        
+        if not file_exists:
+            writer.writeheader()
+            context.log.info(f"Created test CSV: {test_csv_path}")
+        
+        for row in matching_rows:
+            writer.writerow(row)
+    
+    context.log.info(f"Added {len(matching_rows)} CSV rows for ObsNum {obsnum}")

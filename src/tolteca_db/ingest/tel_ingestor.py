@@ -2,6 +2,15 @@
 
 Creates DataProd entries (if needed) and DataProdSource entries with TelInterfaceMeta.
 Updates RawObsMeta with denormalized telescope fields for efficient querying.
+
+The CSV now includes FileName and Valid columns, making it structurally similar to toltec_db:
+- Both provide ObsNum/SubObsNum/ScanNum quartet identification
+- Both include filename for file path construction
+- Both have validation status
+- toltec_db: roach interface metadata
+- lmtmc CSV: tel interface metadata
+
+This unified structure allows similar ingestion patterns for both sources.
 """
 
 from __future__ import annotations
@@ -224,9 +233,28 @@ class TelCSVIngestor:
                     
                     stats.data_prods_updated += 1
                 
-                # Check if tel source already exists
+                # Check if tel source already exists (check by filename-based URI)
+                # Filename from CSV: /data_lmt/tel/tel_toltec_2022-01-14_093026_00_0001.nc
+                # We want relative path from location root: tel/tel_toltec_*.nc
+                from pathlib import Path
+                filename_path = Path(row.filename)
+                
+                # Extract relative path from /data_lmt/ onwards
+                # Example: /data_lmt/tel/file.nc → tel/file.nc
+                try:
+                    # Find 'data_lmt' in path and take everything after it
+                    parts = filename_path.parts
+                    if 'data_lmt' in parts:
+                        data_lmt_idx = parts.index('data_lmt')
+                        rel_parts = parts[data_lmt_idx + 1:]  # Skip 'data_lmt' itself
+                        source_uri = str(Path(*rel_parts))
+                    else:
+                        # Fallback: use filename as-is
+                        source_uri = row.filename
+                except (ValueError, IndexError):
+                    source_uri = row.filename
+                
                 if self.skip_existing:
-                    source_uri = f"tel://tcs-{row.obsnum}-{row.subobsnum}-{row.scannum}"
                     stmt = select(DataProdSource).where(
                         DataProdSource.source_uri == source_uri
                     )
@@ -235,13 +263,15 @@ class TelCSVIngestor:
                         stats.rows_skipped += 1
                         continue
                 
-                # Create DataProdSource for tel interface (complete state)
+                # Create DataProdSource for tel file
+                # Note: We don't check if file actually exists - availability_state will be "UNKNOWN"
+                # until verified. This allows ingesting metadata even if files are offline.
                 source = DataProdSource(
-                    source_uri=f"tel://tcs-{row.obsnum}-{row.subobsnum}-{row.scannum}",
+                    source_uri=source_uri,
                     data_prod_fk=data_prod.pk,
                     location_fk=self.location_pk,
-                    role="METADATA",  # Special role for non-file metadata
-                    availability_state="available",
+                    role="METADATA",
+                    availability_state="UNKNOWN",  # Will be verified later
                     meta=row.tel_metadata,  # Type-safe TelInterfaceMeta storage
                 )
                 
