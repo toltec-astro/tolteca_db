@@ -98,7 +98,7 @@ __all__ = [
 @dataclass
 class ObsIdMixin:
     """Core observation identification fields shared across interfaces and products.
-    
+
     These fields uniquely identify a TolTEC observation quartet.
     Used by both interface-level metadata (RoachInterfaceMeta, TelInterfaceMeta)
     and data product-level metadata (RawObsMeta, ReducedObsMeta, etc.).
@@ -113,7 +113,7 @@ class ObsIdMixin:
 @dataclass
 class RoachMetaMixin:
     """Roach interface metadata fields.
-    
+
     Used by RoachInterfaceMeta (interface-level, complete roach state).
     Each roach interface has its own metadata stored in DataProdSource.meta.
     """
@@ -127,11 +127,11 @@ class RoachMetaMixin:
 @dataclass
 class TelMetaMixin:
     """LMT telescope metadata fields shared between interface and product levels.
-    
+
     Used by:
     - TelInterfaceMeta (interface-level, complete telescope state)
     - RawObsMeta (data product-level, denormalized for query efficiency)
-    
+
     Fields include project info, timing, pointing, optics, and conditions.
     Enables queries like "tau < 0.1" without joining through DataProdSource.
     """
@@ -180,6 +180,9 @@ class DataProdMetaBase:
         TolTEC product type (dp_raw_obs, dp_reduced_obs, etc.)
     description : str | None
         Optional human-readable description
+    obs_datetime : datetime | None
+        Observation datetime (for raw obs) or latest member obs datetime (for groups).
+        Used by tolteca_web for datetime filtering across all data product types.
 
     Notes
     -----
@@ -191,54 +194,55 @@ class DataProdMetaBase:
     name: str
     data_prod_type: DataProdType
     description: str | None = None
+    obs_datetime: datetime | None = None
 
 
 @dataclass
 class RawObsMeta(DataProdMetaBase, ObsIdMixin, TelMetaMixin):
     """Metadata for dp_raw_obs - aggregates from all interface sources.
-    
+
     Data product-level metadata combining:
     - Core identification (ObsIdMixin) - from all interfaces
     - Tel metadata (TelMetaMixin) - denormalized from TelInterfaceMeta for query efficiency
     - Data kind field - TolTEC-specific acquisition mode
-    
+
     Architecture
     ------------
     Uses true inheritance from mixins to share field definitions:
     - ObsIdMixin: obsnum, subobsnum, scannum, master
     - TelMetaMixin: project_id, tau, az_deg, source_name, m1_zernike, etc.
-    
+
     Denormalization Strategy
     ------------------------
     Tel fields are duplicated from TelInterfaceMeta (DataProdSource.meta) to enable
     efficient queries without JOINs:
-    
+
     GOOD: WHERE meta['tau'] < 0.1  # Direct query, O(1) index lookup
     BAD:  JOIN data_prod_source ... WHERE src.meta['tau'] < 0.1  # Expensive JOIN
-    
+
     For master='tcs': Tel fields populated from TelInterfaceMeta
     For master='ics': Tel fields remain None (no tel interface exists)
-    
+
     Attributes
     ----------
     tag : Literal["raw_obs"]
         Discriminator for union type deserialization
     data_kind : int
         Data acquisition mode flags (from ToltecDataKind enum)
-    
+
     Notes
     -----
     All observation identification and telescope metadata fields inherited from mixins.
     See ObsIdMixin and TelMetaMixin for complete field list.
-    Roach interface metadata (nw_id, roach, interface, hostname) is stored in 
+    Roach interface metadata (nw_id, roach, interface, hostname) is stored in
     DataProdSource.meta (RoachInterfaceMeta), not aggregated to DataProd level.
     """
 
     tag: Literal["raw_obs"] = "raw_obs"  # Discriminator for union types
-    
+
     # TolTEC-specific field
     data_kind: int = 0  # ToltecDataKind flag value
-    
+
     # Note: All other fields inherited from mixins:
     # - ObsIdMixin: obsnum, subobsnum, scannum, master
     # - TelMetaMixin: obs_datetime, source_name, obs_goal, project_id, obs_pgm,
@@ -264,7 +268,7 @@ class ReducedObsMeta(DataProdMetaBase, ObsIdMixin):
         ISO8601 processing timestamp
     quality_score : float | None
         Quality metric (0-1 scale, validated at application layer)
-    
+
     Notes
     -----
     Identification fields (obsnum, subobsnum, scannum, master) inherited from ObsIdMixin.
@@ -291,7 +295,9 @@ class CalGroupMeta(DataProdMetaBase, ObsIdMixin):
         Calibration group type
     date_range : tuple[str, str] | None
         Start and end dates of calibration data
-    
+    obs_datetime : datetime | None
+        Latest observation datetime from group members (for tolteca_web filtering)
+
     Notes
     -----
     Identification fields (obsnum, master) inherited from ObsIdMixin.
@@ -320,7 +326,9 @@ class DrivefitMeta(DataProdMetaBase, ObsIdMixin):
         Fit convergence status
     chi_squared : float | None
         Chi-squared goodness of fit (non-negative, validated at application layer)
-    
+    obs_datetime : datetime | None
+        Latest observation datetime from group members (for tolteca_web filtering)
+
     Notes
     -----
     Identification fields (obsnum, master) inherited from ObsIdMixin.
@@ -349,7 +357,9 @@ class FocusGroupMeta(DataProdMetaBase, ObsIdMixin):
         Optimal focus position
     focus_metric : str | None
         Metric used (FWHM, Strehl, etc.)
-    
+    obs_datetime : datetime | None
+        Latest observation datetime from group members (for tolteca_web filtering)
+
     Notes
     -----
     Identification fields (obsnum, master) inherited from ObsIdMixin.
@@ -378,7 +388,9 @@ class AstigGroupMeta(DataProdMetaBase, ObsIdMixin):
         Optimal astigmatism correction (x, y)
     astig_metric : str | None
         Metric used (FWHM, Strehl, etc.)
-    
+    obs_datetime : datetime | None
+        Latest observation datetime from group members (for tolteca_web filtering)
+
     Notes
     -----
     Identification fields (obsnum, master) inherited from ObsIdMixin.
@@ -423,19 +435,19 @@ class NamedGroupMeta(DataProdMetaBase):
 @dataclass
 class RoachInterfaceMeta(ObsIdMixin, RoachMetaMixin):
     """Roach interface metadata for TolTEC detector network files.
-    
+
     Interface-level metadata for toltec0-12 roach interfaces.
     Stored in DataProdSource.meta for roach interface files.
     Contains detector acquisition state including network ID, roach number,
     interface name, and hostname.
-    
+
     Attributes
     ----------
     data_kind : int | None
         ToltecDataKind flag value (inherited from parent DataProd)
     type : Literal["roach"]
         Type discriminator for adaptix union handling
-    
+
     (Inherited from ObsIdMixin)
     obsnum : int
         Observation number
@@ -445,7 +457,7 @@ class RoachInterfaceMeta(ObsIdMixin, RoachMetaMixin):
         Scan number
     master : str
         Master identifier (e.g., 'toltec', 'tcs', 'ics')
-    
+
     (Inherited from RoachMetaMixin)
     nw_id : int | None
         Network ID for roach data
@@ -455,16 +467,16 @@ class RoachInterfaceMeta(ObsIdMixin, RoachMetaMixin):
         Interface name (e.g., 'toltec0', 'toltec1')
     hostname : str | None
         Acquisition computer hostname
-    
+
     Notes
     -----
     Previously called InterfaceFileMeta.
     Renamed to RoachInterfaceMeta for consistency with TelInterfaceMeta.
     """
-    
+
     # Explicit type discriminator for adaptix union handling
     type: Literal["roach"] = "roach"
-    
+
     # Data kind inherited from parent DataProd
     data_kind: int | None = None
 
@@ -472,19 +484,19 @@ class RoachInterfaceMeta(ObsIdMixin, RoachMetaMixin):
 @dataclass
 class TelInterfaceMeta(ObsIdMixin, TelMetaMixin):
     """LMT telescope interface metadata for TolTEC observations.
-    
+
     Interface-level metadata for tel_toltec interface.
     Stored in DataProdSource.meta for tel interface files.
     Represents complete telescope state during observation including
     pointing, mirror configuration, and atmospheric conditions.
     Sourced from LMT metadata database CSV export.
-    
+
     Architecture
     ------------
     Uses mixins to share field definitions with RawObsMeta:
     - ObsIdMixin: obsnum, subobsnum, scannum, master
     - TelMetaMixin: project_id, tau, az_deg, source_name, m1_zernike, etc.
-    
+
     This ensures type consistency between interface-level (complete state)
     and data product-level (denormalized subset) metadata.
 
@@ -506,12 +518,12 @@ class TelInterfaceMeta(ObsIdMixin, TelMetaMixin):
         Reference time (seconds)
     valid : bool
         Valid data flag
-    
+
     Notes
     -----
     Tel interface exists only for master='tcs' observations.
     ICS observations do not have corresponding tel metadata.
-    
+
     Fields from mixins (obsnum, master, tau, az_deg, etc.) inherited.
     See ObsIdMixin and TelMetaMixin for complete field list.
     """
@@ -533,7 +545,7 @@ class TelInterfaceMeta(ObsIdMixin, TelMetaMixin):
 
     # Validation flag
     valid: bool = True
-    
+
     # Note: All other fields inherited from mixins:
     # - ObsIdMixin: obsnum, subobsnum, scannum, master
     # - TelMetaMixin: obs_datetime, source_name, project_id, integration_time,

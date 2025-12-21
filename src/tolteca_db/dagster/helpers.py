@@ -325,6 +325,24 @@ def process_interface_data(
     if file_info is None:
         raise ValueError(f"Could not parse filename: {file_path.name}")
 
+    # Set observation datetime from toltec_db Date and Time columns
+    if row.date and row.time:
+        from datetime import datetime
+
+        # Combine Date and Time into ISO format datetime
+        # Date format: 'YYYY-MM-DD', Time format: 'HH:MM:SS'
+        obs_datetime_str = f"{row.date}T{row.time}"
+        try:
+            file_info.obs_datetime = datetime.fromisoformat(obs_datetime_str)
+        except ValueError:
+            # If parsing fails, log warning but continue
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                f"Could not parse observation datetime from Date={row.date}, Time={row.time}"
+            )
+
     # Use DataIngestor to create DataProd + DataProdSource
     # DuckDB: Retry on write-write conflicts (multi-process contention)
     max_retries = 3
@@ -432,9 +450,9 @@ def add_tel_csv_metadata(
     location,
 ) -> dict:
     """Add tel CSV metadata to existing DataProd using TelCSVIngestor.
-    
+
     Reads test_lmtmc.csv and ingests matching tel metadata row.
-    
+
     Uses unified CSV structure with FileName column to create file-based URIs
     (e.g., tel/tel_toltec_*.nc) instead of virtual URIs (tel://*).
 
@@ -468,22 +486,48 @@ def add_tel_csv_metadata(
     from sqlalchemy import select
     from tolteca_db.models.orm import DataProdSource, DataProd, Location as LocationORM
     from tolteca_db.ingest.tel_ingestor import TelCSVIngestor
-    
-    # Get test CSV path from environment
-    dagster_home = os.getenv("DAGSTER_HOME", ".dagster")
-    test_csv_path = Path(dagster_home) / "test_lmtmc.csv"
-    
-    if not test_csv_path.exists():
-        return {"added": False, "source_uri": None, "status": "csv_not_found"}
-    
+    from tolteca_db.ingest.lmtmc_api import query_lmtmc_csv, LMTMCAPIError
+
+    # Determine CSV source: explicit path or API
+    # LMTMC_CSV_PATH: If set, use this CSV file (for offline/test mode)
+    # If not set, query LMTMC API using TOLTECA_SIMULATOR_DATE
+
+    csv_path_env = os.getenv("LMTMC_CSV_PATH")
+
+    if csv_path_env:
+        # Use explicitly configured CSV file
+        csv_path = Path(csv_path_env)
+        if not csv_path.exists():
+            return {
+                "added": False,
+                "source_uri": None,
+                "status": f"csv_not_found: {csv_path}",
+            }
+    else:
+        # Query API for CSV data
+        # Get date from environment variable (set by simulator or config)
+        obs_date = os.getenv("TOLTECA_SIMULATOR_DATE")
+        if not obs_date:
+            return {"added": False, "source_uri": None, "status": "no_obs_date"}
+
+        try:
+            # Query API for the observation date
+            csv_path = query_lmtmc_csv(
+                start_date=obs_date,
+                end_date=obs_date,
+                force_refresh=False,  # Use cache if available
+            )
+        except LMTMCAPIError as e:
+            return {"added": False, "source_uri": None, "status": f"api_error: {e}"}
+
     with tolteca_db.get_session() as session:
         # Get location_fk
         stmt = select(LocationORM).where(LocationORM.label == location.location_pk)
         location_orm = session.scalar(stmt)
-        
+
         if not location_orm:
             return {"added": False, "source_uri": None, "status": "location_not_found"}
-        
+
         # Check if DataProd already has tel source
         # (tel sources have role="METADATA" and location matching tel location)
         stmt = (
@@ -493,10 +537,14 @@ def add_tel_csv_metadata(
             .where(DataProdSource.location_fk == location_orm.pk)
         )
         existing = session.scalar(stmt)
-        
+
         if existing:
-            return {"added": False, "source_uri": existing.source_uri, "status": "already_exists"}
-        
+            return {
+                "added": False,
+                "source_uri": existing.source_uri,
+                "status": "already_exists",
+            }
+
         # Use TelCSVIngestor to process CSV and create source
         # Set skip_existing=False to ensure we process this quartet
         # Set create_data_prods=False since DataProd already exists
@@ -507,10 +555,10 @@ def add_tel_csv_metadata(
             create_data_prods=False,
             commit_batch_size=1,
         )
-        
+
         # Ingest the CSV - it will find matching row and update DataProd
-        stats = ingestor.ingest_csv(test_csv_path)
-        
+        stats = ingestor.ingest_csv(csv_path)
+
         if stats.sources_created > 0:
             # Query the source that was just created to get its URI
             stmt = (
@@ -527,4 +575,8 @@ def add_tel_csv_metadata(
             return {"added": False, "source_uri": None, "status": "already_exists"}
         else:
             # No matching row found in CSV
-            return {"added": False, "source_uri": source_uri, "status": "csv_row_not_found"}
+            return {
+                "added": False,
+                "source_uri": source_uri,
+                "status": "csv_row_not_found",
+            }

@@ -22,11 +22,21 @@ __all__ = [
     "SimulatorConfig",
 ]
 
+
 # Module-level singleton for shared test database
 # Use file-based database to share across Dagster processes
-# Use DAGSTER_HOME if set, otherwise fall back to .dagster
-_DAGSTER_HOME = os.getenv("DAGSTER_HOME", ".dagster")
-_SHARED_TEST_DB_PATH = Path(_DAGSTER_HOME) / "test_toltecdb.sqlite"
+def _get_test_db_path() -> Path:
+    """Get test database path from TOLTEC_DB_URL or default."""
+    toltec_db_url = os.getenv("TOLTEC_DB_URL")
+    if toltec_db_url and toltec_db_url.startswith("sqlite:///"):
+        # Extract path from SQLite URL
+        return Path(toltec_db_url.replace("sqlite:///", ""))
+    # Fallback to default
+    dagster_home = os.getenv("DAGSTER_HOME", ".dagster")
+    return Path(dagster_home) / "test_toltecdb.sqlite"
+
+
+_SHARED_TEST_DB_PATH = _get_test_db_path()
 _SHARED_TEST_DB: Database | None = None
 
 
@@ -74,15 +84,15 @@ class SimulatorConfig(ConfigurableResource):
         default=None,
         description="Path to test lmtmc CSV (simulator output)",
     )
-    
+
     def resolve_obsnum_filter(self, source_db_url: str) -> list[int] | None:
         """Resolve obsnum_filter from date_filter if needed.
-        
+
         Parameters
         ----------
         source_db_url : str
             URL of source database to query for date filtering
-            
+
         Returns
         -------
         list[int] | None
@@ -91,12 +101,12 @@ class SimulatorConfig(ConfigurableResource):
         # If explicit obsnum_filter provided, use it (takes precedence)
         if self.obsnum_filter:
             return self.obsnum_filter
-        
+
         # If date_filter provided, query source database
         if self.date_filter:
             from sqlalchemy import create_engine, text
             from sqlalchemy.orm import Session
-            
+
             engine = create_engine(source_db_url)
             with Session(engine) as session:
                 result = session.execute(
@@ -106,15 +116,15 @@ class SimulatorConfig(ConfigurableResource):
                         WHERE Date = :date
                         ORDER BY ObsNum
                     """),
-                    {"date": self.date_filter}
+                    {"date": self.date_filter},
                 ).fetchall()
-                
+
                 if result:
                     obsnum_list = [row[0] for row in result]
                     return obsnum_list
-            
+
             engine.dispose()
-        
+
         return None
 
 
@@ -163,6 +173,15 @@ class TestToltecDBResource(ConfigurableResource):
             # Create Database instance using factory
             database_url = f"sqlite:///{_SHARED_TEST_DB_PATH}"
             _SHARED_TEST_DB = create_database(database_url, read_only=False, echo=False)
+
+            # Disable foreign key constraints for test database (for MySQL→SQLite compatibility)
+            from sqlalchemy import event
+
+            @event.listens_for(_SHARED_TEST_DB.metadata_engine, "connect")
+            def set_sqlite_pragma(dbapi_conn, connection_record):
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA foreign_keys=OFF")
+                cursor.close()
 
             # Check if database needs schema initialization
             # (even if file exists, it might be empty)
@@ -223,6 +242,8 @@ class TestToltecDBResource(ConfigurableResource):
         target_db : Database
             Target Database instance to create reflected schema in
         """
+        from sqlalchemy import String
+
         # Check source database exists
         if self.source_db_url.startswith("sqlite:///"):
             db_path = self.source_db_url.replace("sqlite:///", "")
@@ -239,6 +260,27 @@ class TestToltecDBResource(ConfigurableResource):
         context.log.info(
             f"Reflected {len(metadata.tables)} tables from source database"
         )
+
+        # Convert MySQL TIME columns to TEXT for SQLite compatibility
+        for table in metadata.tables.values():
+            for column in table.columns:
+                if str(column.type).upper() == "TIME":
+                    column.type = String(length=20)
+                    context.log.info(
+                        f"Converted {table.name}.{column.name} from TIME to TEXT"
+                    )
+
+        # Fix index name conflicts (e.g., index "ObsType" conflicts with table "obstype")
+        # SQLite is case-insensitive, so rename indexes that conflict with table names
+        table_names = {name.lower() for name in metadata.tables.keys()}
+        for table in metadata.tables.values():
+            for index in list(table.indexes):
+                if index.name and index.name.lower() in table_names:
+                    old_name = index.name
+                    index.name = f"{table.name}_{index.name}_idx"
+                    context.log.info(
+                        f"Renamed index '{old_name}' to '{index.name}' to avoid table name conflict"
+                    )
 
         # Create all tables in test database (empty, schema only)
         # Access underlying engine from Database instance
@@ -268,41 +310,57 @@ class TestToltecDBResource(ConfigurableResource):
         target_db : Database
             Target test Database instance
         """
+        context.log.info("🔍 DEBUG: _populate_reference_tables CALLED")
         from sqlalchemy.orm import Session as SQLASession
 
         reference_tables = ["master", "obstype"]
 
-        with SQLASession(source_engine) as source_session:
-            # Use target_db.session() for proper Database pattern
-            with target_db.session() as target_session:
-                for table_name in reference_tables:
-                    # Copy all rows from source to target
-                    try:
-                        rows = source_session.execute(
-                            text(f"SELECT * FROM {table_name}")
-                        ).fetchall()
-                    except Exception as e:
-                        context.log.warning(
-                            f"⚠ Table {table_name} not found in source database, skipping: {e}"
-                        )
-                        continue
+        context.log.info(
+            f"🔍 DEBUG: About to open source session with {source_engine.url}"
+        )
+        try:
+            with SQLASession(source_engine) as source_session:
+                context.log.info("🔍 DEBUG: Source session opened successfully")
+                # Use target_db.session() for proper Database pattern
+                with target_db.session() as target_session:
+                    context.log.info("🔍 DEBUG: Target session opened successfully")
+                    for table_name in reference_tables:
+                        context.log.info(f"🔍 DEBUG: Processing table {table_name}")
+                        # Copy all rows from source to target
+                        try:
+                            rows = source_session.execute(
+                                text(f"SELECT * FROM {table_name}")
+                            ).fetchall()
+                        except Exception as e:
+                            context.log.warning(
+                                f"⚠ Table {table_name} not found in source database, skipping: {e}"
+                            )
+                            continue
 
-                    if rows:
-                        # Get column names from first row
-                        columns = list(rows[0]._mapping.keys())
-                        column_list = ", ".join(columns)
-                        placeholders = ", ".join([f":{col}" for col in columns])
+                        if rows:
+                            # Get column names from first row
+                            columns = list(rows[0]._mapping.keys())
+                            column_list = ", ".join(columns)
+                            placeholders = ", ".join([f":{col}" for col in columns])
 
-                        insert_stmt = text(
-                            f"INSERT INTO {table_name} ({column_list}) VALUES ({placeholders})"
-                        )
+                            insert_stmt = text(
+                                f"INSERT INTO {table_name} ({column_list}) VALUES ({placeholders})"
+                            )
 
-                        for row in rows:
-                            target_session.execute(insert_stmt, dict(row._mapping))
+                            for row in rows:
+                                target_session.execute(insert_stmt, dict(row._mapping))
 
-                        target_session.commit()
-                        context.log.info(
-                            f"✓ Copied {len(rows)} rows from {table_name} table"
-                        )
-                    else:
-                        context.log.warning(f"⚠ No rows found in {table_name} table")
+                            target_session.commit()
+                            context.log.info(
+                                f"✓ Copied {len(rows)} rows from {table_name} table"
+                            )
+                        else:
+                            context.log.warning(
+                                f"⚠ No rows found in {table_name} table"
+                            )
+        except Exception as e:
+            context.log.error(f"❌ Fatal error in _populate_reference_tables: {e}")
+            import traceback
+
+            context.log.error(traceback.format_exc())
+            raise

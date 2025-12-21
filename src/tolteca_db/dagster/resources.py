@@ -60,7 +60,17 @@ class ToltecaDBResource(ConfigurableResource):
             # Use SQLite for metadata (WAL mode for concurrent writes)
             # DuckDB will be used internally for Parquet queries
             dagster_home = Path(os.getenv("DAGSTER_HOME", ".dagster"))
-            test_db_path = dagster_home / "test_tolteca.sqlite"
+
+            # Extract database filename from TOLTECA_DB_URL if set
+            tolteca_db_url = os.getenv("TOLTECA_DB_URL", "")
+            if tolteca_db_url.startswith("sqlite:///"):
+                # Extract just the filename from the full path
+                db_filename = Path(tolteca_db_url.replace("sqlite:///", "")).name
+            else:
+                # Default filename for test mode
+                db_filename = "test_tolteca.sqlite"
+
+            test_db_path = dagster_home / db_filename
             return f"sqlite:///{test_db_path.absolute()}"
         return self.database_url
 
@@ -84,10 +94,22 @@ class ToltecaDBResource(ConfigurableResource):
         # In test mode, use file lock to ensure only one process initializes database
         if os.getenv("DAGSTER_TEST_MODE") == "1":
             dagster_home = Path(os.getenv("DAGSTER_HOME", ".dagster"))
-            test_db_path = dagster_home / "test_tolteca.sqlite"
+
+            # Extract database filename from TOLTECA_DB_URL if set
+            tolteca_db_url = os.getenv("TOLTECA_DB_URL", "")
+            if tolteca_db_url.startswith("sqlite:///"):
+                # Extract just the filename from the full path
+                db_filename = Path(tolteca_db_url.replace("sqlite:///", "")).name
+            else:
+                # Default filename for test mode
+                db_filename = "test_tolteca.sqlite"
+
+            test_db_path = dagster_home / db_filename
             test_db_path.parent.mkdir(parents=True, exist_ok=True)
-            lock_file_path = dagster_home / "test_tolteca.lock"
-            init_marker_path = dagster_home / "test_tolteca.initialized"
+            lock_file_path = dagster_home / f"{db_filename.replace('.sqlite', '.lock')}"
+            init_marker_path = (
+                dagster_home / f"{db_filename.replace('.sqlite', '.initialized')}"
+            )
 
             # Check if database is already initialized
             if test_db_path.exists() and init_marker_path.exists():
@@ -127,28 +149,40 @@ class ToltecaDBResource(ConfigurableResource):
                 with db.session() as session:
                     counts = populate_registry_tables(session)
                     context.log.info(f"✓ Registry tables populated: {counts}")
-                    
+
                     # Create Location entry for LMT using data root from environment
                     from tolteca_db.models import Location
                     from sqlalchemy import select
+
                     stmt = select(Location).where(Location.label == "LMT")
                     existing = session.scalar(stmt)
                     if not existing:
                         # Get data root from environment (should be expanded by CLI's load_dotenv)
-                        data_lmt_root = os.getenv("TOLTECA_WEB_DATA_LMT_ROOTPATH", "/data/lmt")
-                        root_uri = f"file://{data_lmt_root}" if not data_lmt_root.startswith("file://") else data_lmt_root
+                        data_lmt_root = os.getenv(
+                            "TOLTECA_WEB_DATA_LMT_ROOTPATH", "/data/lmt"
+                        )
+                        root_uri = (
+                            f"file://{data_lmt_root}"
+                            if not data_lmt_root.startswith("file://")
+                            else data_lmt_root
+                        )
                         new_location = Location(
                             label="LMT",
                             location_type="filesystem",
                             root_uri=root_uri,
                             priority=1,
-                            meta={"site": "Large Millimeter Telescope", "country": "Mexico"},
+                            meta={
+                                "site": "Large Millimeter Telescope",
+                                "country": "Mexico",
+                            },
                         )
                         session.add(new_location)
                         session.commit()
                         context.log.info(f"✓ Created Location: LMT at {root_uri}")
                     else:
-                        context.log.info(f"✓ Location LMT already exists: {existing.root_uri}")
+                        context.log.info(
+                            f"✓ Location LMT already exists: {existing.root_uri}"
+                        )
 
                 db.close()
 
@@ -183,29 +217,42 @@ class ToltecaDBResource(ConfigurableResource):
             with db.session() as session:
                 counts = populate_registry_tables(session)
                 context.log.info(f"✓ Registry tables populated: {counts}")
-                
+
                 # Create Location entry for LMT using data root from environment
                 from tolteca_db.models import Location
                 from sqlalchemy import select
+
                 stmt = select(Location).where(Location.label == "LMT")
                 existing = session.scalar(stmt)
                 if not existing:
                     import os
+
                     # Get data root from environment (should be expanded by CLI's load_dotenv)
-                    data_lmt_root = os.getenv("TOLTECA_WEB_DATA_LMT_ROOTPATH", "/data/lmt")
-                    root_uri = f"file://{data_lmt_root}" if not data_lmt_root.startswith("file://") else data_lmt_root
+                    data_lmt_root = os.getenv(
+                        "TOLTECA_WEB_DATA_LMT_ROOTPATH", "/data/lmt"
+                    )
+                    root_uri = (
+                        f"file://{data_lmt_root}"
+                        if not data_lmt_root.startswith("file://")
+                        else data_lmt_root
+                    )
                     new_location = Location(
                         label="LMT",
                         location_type="filesystem",
                         root_uri=root_uri,
                         priority=1,
-                        meta={"site": "Large Millimeter Telescope", "country": "Mexico"},
+                        meta={
+                            "site": "Large Millimeter Telescope",
+                            "country": "Mexico",
+                        },
                     )
                     session.add(new_location)
                     session.commit()
                     context.log.info(f"✓ Created Location: LMT at {root_uri}")
                 else:
-                    context.log.info(f"✓ Location LMT already exists: {existing.root_uri}")
+                    context.log.info(
+                        f"✓ Location LMT already exists: {existing.root_uri}"
+                    )
 
             db.close()
 

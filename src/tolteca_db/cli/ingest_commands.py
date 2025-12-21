@@ -673,9 +673,9 @@ def _generate_associations_after_ingest(engine, n_ingested: int) -> None:
 @ingest_app.command(name="from-tel-csv")
 def from_tel_csv(
     csv_path: Annotated[
-        Path,
-        typer.Argument(help="Path to LMT telescope metadata CSV"),
-    ],
+        Optional[Path],
+        typer.Argument(help="Path to LMT telescope metadata CSV (or use --start-date for API mode)"),
+    ] = None,
     location: Annotated[
         str,
         typer.Option("--location", "-l", help="Location label for tel metadata"),
@@ -696,12 +696,39 @@ def from_tel_csv(
         Optional[str],
         typer.Option("--db", help="Database URL"),
     ] = None,
+    start_date: Annotated[
+        Optional[str],
+        typer.Option("--start-date", "-s", help="Start date for LMTMC API query (YYYY-MM-DD)"),
+    ] = None,
+    end_date: Annotated[
+        Optional[str],
+        typer.Option("--end-date", "-e", help="End date for LMTMC API query (YYYY-MM-DD). Defaults to start_date."),
+    ] = None,
+    api_url: Annotated[
+        Optional[str],
+        typer.Option("--api-url", help="LMTMC API base URL (default: from LMTMC_API_BASE_URL env)"),
+    ] = None,
+    force_refresh: Annotated[
+        bool,
+        typer.Option("--force-refresh", help="Force API query (ignore cache)"),
+    ] = False,
 ) -> None:
     """
-    Ingest LMT telescope metadata from CSV file.
+    Ingest LMT telescope metadata from CSV file or LMTMC API.
+    
+    Two modes:
+    
+    1. File mode (provide CSV_PATH):
+       tolteca_db ingest from-tel-csv /path/to/lmtmc.csv --location LMT
+    
+    2. API mode (provide --start-date):
+       tolteca_db ingest from-tel-csv --start-date 2025-10-31 --end-date 2025-10-31
+    
+    API mode queries http://187.248.54.232/cgi-bin/lmtmc/mc_sql.cgi and caches
+    the CSV response locally. Cached files are reused unless --force-refresh is specified.
     
     CSV format: lmtmc_toltec_metadata.csv from LMT metadata database.
-    CSV now includes FileName and Valid columns, providing complete quartet metadata:
+    CSV includes FileName and Valid columns, providing complete quartet metadata:
     - ObsNum.SubObsNum.ScanNum identification
     - Filename for file path construction
     - Valid flag for data validation status
@@ -715,10 +742,22 @@ def from_tel_csv(
     File paths are constructed from FileName column (e.g., /data_lmt/tel/tel_*.nc)
     and stored as relative URIs (e.g., tel/tel_*.nc).
     
-    Example:
+    Examples:
+        # File mode
         tolteca_db ingest from-tel-csv run/lmtmc_toltec_metadata.csv \\
             --location LMT \\
             --db "duckdb:///tolteca.duckdb"
+        
+        # API mode (single date)
+        tolteca_db ingest from-tel-csv \\
+            --start-date 2025-10-31 \\
+            --location LMT
+        
+        # API mode (date range)
+        tolteca_db ingest from-tel-csv \\
+            --start-date 2025-10-01 \\
+            --end-date 2025-10-31 \\
+            --location LMT
     """
     from tolteca_db.db import get_engine
     from sqlalchemy.orm import Session
@@ -726,7 +765,41 @@ def from_tel_csv(
     from tolteca_db.ingest.tel_ingestor import TelCSVIngestor
     from sqlalchemy import select
     
-    if not csv_path.exists():
+    # Determine mode: file or API
+    if csv_path is None and start_date is None:
+        console.print("[red]Error:[/red] Either CSV_PATH or --start-date must be provided")
+        console.print("[yellow]Hint:[/yellow] Use 'tolteca_db ingest from-tel-csv --help' for usage")
+        raise typer.Exit(code=1)
+    
+    if csv_path is not None and start_date is not None:
+        console.print("[red]Error:[/red] Cannot use both CSV_PATH and --start-date")
+        console.print("[yellow]Hint:[/yellow] Choose either file mode or API mode")
+        raise typer.Exit(code=1)
+    
+    # API mode: Query LMTMC API
+    if start_date is not None:
+        from tolteca_db.ingest.lmtmc_api import query_lmtmc_csv, LMTMCAPIError
+        
+        # Default end_date to start_date
+        if end_date is None:
+            end_date = start_date
+        
+        console.print(f"[bold blue]Querying LMTMC API:[/bold blue] {start_date} to {end_date}")
+        
+        try:
+            csv_path = query_lmtmc_csv(
+                start_date=start_date,
+                end_date=end_date,
+                api_base_url=api_url,
+                force_refresh=force_refresh,
+            )
+            console.print(f"[green]✓[/green] CSV cached at: {csv_path}")
+        except LMTMCAPIError as e:
+            console.print(f"[red]Error:[/red] API query failed: {e}")
+            raise typer.Exit(code=1)
+    
+    # File mode validation
+    if csv_path is not None and not csv_path.exists():
         console.print(f"[red]Error:[/red] CSV file not found: {csv_path}")
         raise typer.Exit(code=1)
     
