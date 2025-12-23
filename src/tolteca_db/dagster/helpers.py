@@ -84,7 +84,16 @@ def query_toltec_db_since(
     observations = []
     for row in rows:
         # Combine date and time into timestamp
-        timestamp = datetime.fromisoformat(f"{row.date} {row.time}")
+        # Handle both SQLite (TEXT) and MySQL (TIME/timedelta)
+        from datetime import timedelta
+        
+        if isinstance(row.time, timedelta):
+            # MySQL returns TIME as timedelta - combine with date
+            base_date = datetime.strptime(str(row.date), "%Y-%m-%d")
+            timestamp = base_date + row.time
+        else:
+            # SQLite returns TIME as TEXT string
+            timestamp = datetime.fromisoformat(f"{row.date} {row.time}")
 
         observations.append(
             {
