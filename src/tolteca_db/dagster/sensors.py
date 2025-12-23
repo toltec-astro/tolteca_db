@@ -134,7 +134,7 @@ class QuartetValidationTracker:
     target=process_quartet,
     minimum_interval_seconds=10,  # Poll every 10 seconds for complete quartets
     description="Detect complete quartets in toltec_db and trigger processing",
-    required_resource_keys={"toltec_db", "validation"},
+    required_resource_keys={"toltec_db", "tolteca_db", "validation"},
     default_status=DefaultSensorStatus.RUNNING,
 )
 def quartet_sensor(context: SensorEvaluationContext):
@@ -181,31 +181,88 @@ def quartet_sensor(context: SensorEvaluationContext):
     # Get state from cursor (persistent across sensor evaluations)
     # Cursor format: JSON with {"last_check": "ISO timestamp", "quartet_states": {...}, "completed_quartets": [...]}
     import json
+    import os
+
+    # Use same date range as batch ingestion for consistency
+    # Priority: TOLTECA_SIMULATOR_DATE > TOLTECA_INGEST_START_DATE > default (7 days ago)
+    default_start_date = os.getenv("TOLTECA_SIMULATOR_DATE") or os.getenv(
+        "TOLTECA_INGEST_START_DATE"
+    )
+    if not default_start_date:
+        # Fallback to 7 days ago (same as run_ingest_all.sh)
+        from datetime import timedelta
+        default_start_date = (datetime.now(timezone.utc) - timedelta(days=7)).date().isoformat()
+    
+    # Ensure ISO format with timezone
+    if "T" not in default_start_date:
+        default_start_date = f"{default_start_date}T00:00:00Z"
+    elif not default_start_date.endswith("Z"):
+        default_start_date = f"{default_start_date}Z"
 
     if context.cursor:
         try:
             cursor_data = json.loads(context.cursor)
-            last_check = cursor_data.get("last_check", "2024-01-01T00:00:00Z")
+            last_check = cursor_data.get("last_check", default_start_date)
             saved_states = cursor_data.get("quartet_states", {})
-            completed_quartets = set(cursor_data.get("completed_quartets", []))
         except (json.JSONDecodeError, ValueError):
             # Backward compatibility: treat as plain timestamp string
             last_check = context.cursor
             saved_states = {}
-            completed_quartets = set()
     else:
-        last_check = "2024-01-01T00:00:00Z"
+        last_check = default_start_date
         saved_states = {}
-        completed_quartets = set()
 
     last_check_dt = datetime.fromisoformat(last_check.replace("Z", "+00:00"))
     context.log.info(
-        f"Checking for complete quartets since {last_check} ({len(completed_quartets)} already completed)"
+        f"Checking for complete quartets since {last_check}"
     )
 
     # Query toltec_db for new/updated observations
     toltec_db = context.resources.toltec_db
+    tolteca_db = context.resources.tolteca_db
     validation = context.resources.validation
+
+    # Helper function to check if quartet already ingested
+    def data_prod_exists(quartet_key: str) -> bool:
+        """Check if DataProd already exists for this quartet."""
+        from tolteca_db.models import DataProd
+        import sqlalchemy as sa
+        
+        # Parse quartet_key: "ics-17810-0-0" → master, obsnum, subobsnum, scannum
+        parts = quartet_key.split('-')
+        if len(parts) != 4:
+            return False
+        
+        master = parts[0]
+        try:
+            obsnum = int(parts[1])
+            subobsnum = int(parts[2])
+            scannum = int(parts[3])
+        except ValueError:
+            return False
+        
+        # Query for matching DataProd in tolteca_db
+        with tolteca_db.get_session() as session:
+            result = session.query(DataProd).filter(
+                sa.cast(
+                    sa.func.json_extract(DataProd.meta, '$.master'),
+                    sa.String
+                ) == master,
+                sa.cast(
+                    sa.func.json_extract(DataProd.meta, '$.obsnum'),
+                    sa.Integer
+                ) == obsnum,
+                sa.cast(
+                    sa.func.json_extract(DataProd.meta, '$.subobsnum'),
+                    sa.Integer
+                ) == subobsnum,
+                sa.cast(
+                    sa.func.json_extract(DataProd.meta, '$.scannum'),
+                    sa.Integer
+                ) == scannum,
+            ).first()
+            
+            return result is not None
 
     with toltec_db.get_session() as session:
         new_obs = query_toltec_db_since(last_check_dt, session=session)
@@ -256,12 +313,17 @@ def quartet_sensor(context: SensorEvaluationContext):
     disabled_interfaces = validation.disabled_interfaces
     expected_count = validation.max_interface_count - len(disabled_interfaces)
     current_time = datetime.now(timezone.utc)
+    
+    # Batch size limit to prevent timeout (configurable via env var)
+    batch_size = int(os.getenv("QUARTET_SENSOR_BATCH_SIZE", "50"))
+    
+    # Track latest quartet timestamp to advance cursor
+    latest_quartet_time = last_check_dt
+    
+    # Track which quartets are already ingested (to clean up quartet_states)
+    already_ingested_keys = set()
 
     for quartet_key, quartet_data in quartets.items():
-        # Skip already completed quartets
-        if quartet_key in completed_quartets:
-            continue
-
         interfaces = quartet_data["interfaces"]
 
         # Filter out disabled interfaces
@@ -290,8 +352,25 @@ def quartet_sensor(context: SensorEvaluationContext):
         )
 
         if is_complete:
-            # Mark quartet as completed
-            completed_quartets.add(quartet_key)
+            # Update latest timestamp for cursor advancement
+            obs_timestamp = quartet_data["timestamp"]
+            # Ensure timezone-aware comparison
+            if obs_timestamp.tzinfo is None:
+                obs_timestamp = obs_timestamp.replace(tzinfo=timezone.utc)
+            if latest_quartet_time.tzinfo is None:
+                latest_quartet_time = latest_quartet_time.replace(tzinfo=timezone.utc)
+            
+            if obs_timestamp > latest_quartet_time:
+                latest_quartet_time = obs_timestamp
+            
+            # Check if already ingested (duplicate detection)
+            if data_prod_exists(quartet_key):
+                context.log.info(
+                    f"⏭️  Quartet {quartet_key} already ingested, skipping"
+                )
+                # Track this so we can clean up its state from cursor
+                already_ingested_keys.add(quartet_key)
+                continue
 
             # Register quartet partition if first time seeing it
             context.instance.add_dynamic_partitions(
@@ -327,23 +406,39 @@ def quartet_sensor(context: SensorEvaluationContext):
             context.log.info(
                 f"✓ Quartet {quartet_key} complete ({reason})! Creating run."
             )
+            
+            # BATCH SIZE LIMIT: Stop processing when batch is full
+            if len(run_requests) >= batch_size:
+                context.log.info(
+                    f"Reached batch size limit ({batch_size}), will continue in next tick"
+                )
+                break
         else:
             context.log.info(f"⏳ Quartet {quartet_key}: {reason}")
 
-    # Update cursor: keep last_check fixed, save tracker state and completed quartets
+    # Update cursor: advance last_check and save incomplete quartet states
     if quartets:
-        # Don't advance last_check - we need to keep seeing incomplete quartets
-        # Only track state changes
+        # Advance last_check to latest quartet timestamp to avoid re-querying old data
+        new_last_check = latest_quartet_time.isoformat().replace("+00:00", "Z")
+        
+        # Only keep states for incomplete quartets (remove completed and already-ingested ones)
+        incomplete_states = {
+            key: state 
+            for key, state in tracker.quartet_states.items()
+            if key in quartets 
+            and key not in already_ingested_keys  # Remove already-ingested
+            and not any(rr.partition_key == key for rr in run_requests)  # Remove completed
+        }
+        
         cursor_data = {
-            "last_check": last_check,  # Keep original start time
-            "quartet_states": tracker.quartet_states,
-            "completed_quartets": list(completed_quartets),
+            "last_check": new_last_check,
+            "quartet_states": incomplete_states,
         }
         import json
 
         context.update_cursor(json.dumps(cursor_data))
         context.log.info(
-            f"Saved state: {len(tracker.quartet_states)} tracked, {len(completed_quartets)} completed"
+            f"Advanced cursor to {new_last_check}, tracking {len(incomplete_states)} incomplete quartets"
         )
 
     if run_requests:
