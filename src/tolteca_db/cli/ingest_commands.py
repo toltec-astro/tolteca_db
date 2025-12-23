@@ -288,13 +288,17 @@ def scan_directory(
 @ingest_app.command(name="from-toltec-db")
 def ingest_from_toltec_db(
     toltec_db: Annotated[
-        Path,
-        typer.Argument(help="Path to toltec_db SQLite database"),
-    ],
+        Optional[str],
+        typer.Argument(help="Path to toltec_db SQLite file or database URL (e.g., mysql+pymysql://...)"),
+    ] = None,
+    toltec_db_url: Annotated[
+        Optional[str],
+        typer.Option("--toltec-db-url", help="toltec_db database URL (alternative to positional arg)"),
+    ] = None,
     data_root: Annotated[
-        Path,
-        typer.Option("--data-root", help="Root directory containing raw files"),
-    ],
+        Optional[Path],
+        typer.Option("--data-root", help="Root directory containing LMT raw data tree (e.g., /data_lmt). If not provided, will look up from Location table."),
+    ] = None,
     target_url: Annotated[
         Optional[str],
         typer.Option("--db", help="Target database URL"),
@@ -303,10 +307,6 @@ def ingest_from_toltec_db(
         str,
         typer.Option("--location", help="Location label (e.g., LMT, local)"),
     ] = "LMT",
-    location_root: Annotated[
-        Optional[Path],
-        typer.Option("--location-root", help="Location root path (for source_uri calculation, defaults to --data-root)"),
-    ] = None,
     master: Annotated[
         str,
         typer.Option("--master", help="Master identifier (tcs/ics/clip)"),
@@ -314,6 +314,14 @@ def ingest_from_toltec_db(
     obstype_filter: Annotated[
         Optional[str],
         typer.Option("--obstype", help="Filter by obs type (Nominal/VNA/TARG/TUNE)"),
+    ] = None,
+    start_date: Annotated[
+        Optional[str],
+        typer.Option("--start-date", help="Start date (YYYY-MM-DD)"),
+    ] = None,
+    end_date: Annotated[
+        Optional[str],
+        typer.Option("--end-date", help="End date (YYYY-MM-DD)"),
     ] = None,
     limit: Annotated[
         Optional[int],
@@ -327,10 +335,6 @@ def ingest_from_toltec_db(
         bool,
         typer.Option("--dry-run", help="Preview without ingesting"),
     ] = False,
-    create_location: Annotated[
-        bool,
-        typer.Option("--create-location/--no-create-location", help="Create location if it doesn't exist"),
-    ] = True,
     with_associations: Annotated[
         bool,
         typer.Option("--with-associations", help="Generate associations after ingestion"),
@@ -339,153 +343,200 @@ def ingest_from_toltec_db(
     """
     Ingest files from toltec_db (real-time acquisition database).
     
-    The toltec_db SQLite database is created during telescope observations
-    and tracks all raw files as they're acquired. This command reads the
-    toltec_db registry and ingests the corresponding files into tolteca_db.
+    The --data-root specifies the root directory containing the LMT raw data tree
+    (e.g., /data_lmt, ./data_lmt, ~/data_lmt). If not provided, it will be looked
+    up from the Location table using the --location name.
     
-    The --data-root specifies where to find the files on the current system.
-    The --location-root (defaults to --data-root) specifies the root path 
-    that will be stored in the Location.root_uri for computing relative paths.
+    If both --data-root and --location are provided and the location doesn't exist,
+    a new location entry will be created automatically.
     
     Use --with-associations to automatically generate associations
     (CalGroup, DriveFit, FocusGroup) after ingestion completes.
     
     Examples:
-        # Ingest all files from toltec_db
-        tolteca_db ingest from-toltec-db run/toltecdb_last_30days.sql \\
-            --data-root /data_lmt/toltec/tcs
+        # Ingest with location from database
+        tolteca_db ingest from-toltec-db --toltec-db-url mysql+pymysql://...
+        
+        # Ingest with explicit data_root
+        tolteca_db ingest from-toltec-db \\
+            --toltec-db-url mysql+pymysql://... \\
+            --data-root /data_lmt
         
         # Dry-run to preview
-        tolteca_db ingest from-toltec-db run/toltecdb_last_30days.sql \\
-            --data-root /data_lmt/toltec/tcs --dry-run
+        tolteca_db ingest from-toltec-db \\
+            --toltec-db-url mysql+pymysql://... \\
+            --dry-run
         
         # With automatic association generation
-        tolteca_db ingest from-toltec-db run/toltecdb_last_30days.sql \\
-            --data-root /data_lmt/toltec/tcs --with-associations
-        
-        # Different location root for relative paths
-        tolteca_db ingest from-toltec-db run/toltecdb_last_30days.sql \\
-            --data-root /local/scratch/data \\
-            --location-root /data_lmt/toltec/tcs \\
-            --location local_scratch
+        tolteca_db ingest from-toltec-db \\
+            --toltec-db-url mysql+pymysql://... \\
+            --with-associations
     """
     import sqlite3
     from tolteca_db.db import get_engine, get_session
     from tolteca_db.ingest.ingest import DataIngestor
     from tolteca_db.ingest.file_scanner import guess_info_from_file
     from tolteca_db.models.orm import Location
-    from sqlalchemy import select
+    from sqlalchemy import select, text, create_engine
     from rich.progress import Progress
-    
-    if not toltec_db.exists():
-        console.print(f"[red]Error:[/red] toltec_db not found: {toltec_db}")
-        raise typer.Exit(code=1)
-    
-    if not data_root.exists():
-        console.print(f"[red]Error:[/red] data_root not found: {data_root}")
-        raise typer.Exit(code=1)
-    
-    # Use absolute() to get absolute path without following symlinks,
-    # then normalize to remove .. components
     import os
-    toltec_db = Path(os.path.normpath(toltec_db.absolute()))
-    data_root = Path(os.path.normpath(data_root.absolute()))
     
-    # Use data_root as location_root if not specified
-    if location_root is None:
-        location_root = data_root
-    else:
-        location_root = Path(os.path.normpath(location_root.absolute()))
+    # Determine toltec_db source
+    source_db_url = toltec_db_url or toltec_db
+    if not source_db_url:
+        console.print("[red]Error:[/red] Must provide toltec_db path/URL as argument or --toltec-db-url option")
+        raise typer.Exit(code=1)
     
-    console.print(f"[bold blue]Ingesting from toltec_db:[/bold blue] {toltec_db}")
-    console.print(f"Data root: {data_root}")
-    console.print(f"Location root: {location_root}")
-    console.print(f"Location: {location}, Master: {master}\n")
+    # Check if it's a file path or database URL
+    is_file = not source_db_url.startswith(('sqlite://', 'mysql://', 'mysql+pymysql://', 'postgresql://'))
     
-    # Connect to toltec_db (source)
-    toltec_conn = sqlite3.connect(str(toltec_db))
-    toltec_conn.row_factory = sqlite3.Row
-    cursor = toltec_conn.cursor()
+    if is_file:
+        # File path - convert to Path and check existence
+        toltec_db_path = Path(source_db_url)
+        if not toltec_db_path.exists():
+            console.print(f"[red]Error:[/red] toltec_db not found: {toltec_db_path}")
+            raise typer.Exit(code=1)
+        # Use absolute() to get absolute path without following symlinks
+        toltec_db_path = Path(os.path.normpath(toltec_db_path.absolute()))
+        source_db_url = f"sqlite:///{toltec_db_path}"
     
-    # Build query for toltec table
-    query = """
-        SELECT t.*, o.label as obstype_label
-        FROM toltec t
-        LEFT JOIN obstype o ON t.ObsType = o.id
-        WHERE t.Valid = 1
-    """
-    
-    params = []
-    if obstype_filter:
-        query += " AND o.label = ?"
-        params.append(obstype_filter)
-    
-    if limit:
-        query += f" LIMIT {limit}"
-    
-    # Execute query
-    cursor.execute(query, params)
-    rows = cursor.fetchall()
-    
-    console.print(f"Found {len(rows)} valid entries in toltec_db\n")
-    
-    if dry_run:
-        # Preview mode
-        table = Table(title="Preview (Dry Run)")
-        table.add_column("ObsNum", style="magenta", justify="right")
-        table.add_column("SubObs", style="blue", justify="right")
-        table.add_column("Scan", style="blue", justify="right")
-        table.add_column("ObsType", style="green")
-        table.add_column("FileName", style="cyan", overflow="fold")
-        
-        for row in rows[:50]:  # Show first 50
-            table.add_row(
-                str(row['ObsNum']),
-                str(row['SubObsNum']),
-                str(row['ScanNum']),
-                row['obstype_label'] or "?",
-                row['FileName'],
-            )
-        
-        console.print(table)
-        if len(rows) > 50:
-            console.print(f"\n[yellow]Note:[/yellow] Showing first 50 of {len(rows)} entries")
-        console.print("\n[yellow]Dry run complete.[/yellow] Use --no-dry-run to ingest.")
-        toltec_conn.close()
-        return
-    
-    # Actual ingestion
+    # Get target database engine
     engine = get_engine(target_url)
     
+    # Resolve data_root and location
     with Session(engine) as session:
-        # Ensure location exists with correct root_uri
+        # Look up location
         stmt = select(Location).where(Location.label == location)
         loc = session.scalar(stmt)
         
-        if loc is None:
-            if not create_location:
-                console.print(f"[red]Error:[/red] Location '{location}' not found and --no-create-location specified")
-                toltec_conn.close()
+        if data_root is None:
+            # No data_root provided - must get from location table
+            if loc is None:
+                console.print(f"[red]Error:[/red] Location '{location}' not found in database and no --data-root provided")
+                console.print("[yellow]Hint:[/yellow] Either provide --data-root or create the location first with 'tolteca_db db init'")
                 raise typer.Exit(code=1)
             
-            # Create location
-            console.print(f"Creating location '{location}' with root: file://{location_root}")
-            loc = Location(
-                label=location,
-                location_type="filesystem",
-                root_uri=f"file://{location_root}",
-                priority=100,
-            )
-            session.add(loc)
-            session.flush()
+            # Extract data_root from location root_uri
+            if loc.root_uri.startswith('file://'):
+                data_root = Path(loc.root_uri.replace('file://', '', 1))
+            else:
+                data_root = Path(loc.root_uri)
+            
+            console.print(f"[green]Using data_root from Location '{location}':[/green] {data_root}")
         else:
-            # Verify root_uri matches
-            expected_root = f"file://{location_root}"
-            if loc.root_uri != expected_root:
-                console.print(f"[yellow]Warning:[/yellow] Location root_uri mismatch:")
-                console.print(f"  Expected: {expected_root}")
-                console.print(f"  Actual:   {loc.root_uri}")
-                console.print(f"  Files will be stored relative to: {loc.root_uri}")
+            # data_root provided - expand and normalize (preserve symlinks)
+            data_root = Path(os.path.expanduser(str(data_root)))
+            data_root = Path(os.path.normpath(data_root.absolute()))
+            
+            if not data_root.exists():
+                console.print(f"[red]Error:[/red] data_root not found: {data_root}")
+                raise typer.Exit(code=1)
+            
+            # Check if location exists
+            if loc is None:
+                # Create new location
+                console.print(f"[yellow]Creating new location '{location}' with data_root:[/yellow] {data_root}")
+                loc = Location(
+                    label=location,
+                    location_type="filesystem",
+                    root_uri=f"file://{data_root}",
+                    priority=100,
+                )
+                session.add(loc)
+                session.commit()
+            else:
+                # Verify root_uri matches
+                expected_root = f"file://{data_root}"
+                if loc.root_uri != expected_root:
+                    console.print(f"[yellow]Warning:[/yellow] Location root_uri mismatch:")
+                    console.print(f"  Expected: {expected_root}")
+                    console.print(f"  Actual:   {loc.root_uri}")
+                    console.print(f"  Using location's root_uri: {loc.root_uri}")
+                    # Use location's root_uri
+                    if loc.root_uri.startswith('file://'):
+                        data_root = Path(loc.root_uri.replace('file://', '', 1))
+                    else:
+                        data_root = Path(loc.root_uri)
+    
+    console.print(f"\n[bold blue]Ingesting from toltec_db:[/bold blue] {source_db_url}")
+    console.print(f"Data root: {data_root}")
+    console.print(f"Location: {location}, Master: {master}\n")
+    
+    # Connect to toltec_db (source) using SQLAlchemy
+    from sqlalchemy import create_engine
+    toltec_engine = create_engine(source_db_url)
+    
+    with Session(toltec_engine) as toltec_session:
+        # Build query for toltec table using database-agnostic SQL
+        query_sql = """
+            SELECT t.*, o.label as obstype_label,
+                   LOWER(m.label) as master_label
+            FROM toltec t
+            LEFT JOIN obstype o ON t.ObsType = o.id
+            LEFT JOIN master m ON t.Master = m.id
+            WHERE t.Valid = 1
+        """
+        
+        params = {}
+        if obstype_filter:
+            query_sql += " AND o.label = :obstype"
+            params["obstype"] = obstype_filter
+        
+        if start_date:
+            query_sql += " AND t.Date >= :start_date"
+            params["start_date"] = start_date
+        
+        if end_date:
+            query_sql += " AND t.Date <= :end_date"
+            params["end_date"] = end_date
+        
+        if limit:
+            query_sql += f" LIMIT {limit}"
+        
+        # Execute query
+        result = toltec_session.execute(text(query_sql), params)
+        rows = result.fetchall()
+        
+        console.print(f"Found {len(rows)} valid entries in toltec_db\n")
+        
+        if dry_run:
+            # Preview mode
+            table = Table(title="Preview (Dry Run)")
+            table.add_column("ObsNum", style="magenta", justify="right")
+            table.add_column("SubObs", style="blue", justify="right")
+            table.add_column("Scan", style="blue", justify="right")
+            table.add_column("ObsType", style="green")
+            table.add_column("FileName", style="cyan", overflow="fold")
+            
+            for row in rows[:50]:  # Show first 50
+                table.add_row(
+                    str(row.ObsNum),
+                    str(row.SubObsNum),
+                    str(row.ScanNum),
+                    row.obstype_label or "?",
+                    row.FileName,
+                )
+            
+            console.print(table)
+            if len(rows) > 50:
+                console.print(f"\n[yellow]Note:[/yellow] Showing first 50 of {len(rows)} entries")
+            console.print("\n[yellow]Dry run complete.[/yellow] Use --no-dry-run to ingest.")
+            return
+    
+    # Actual ingestion
+    import time
+    timings = {
+        'path_construct': 0,
+        'parse_file': 0,
+        'ingest_file': 0,
+        'file_exists': 0,
+        'commit': 0,
+    }
+    
+    with Session(engine) as session:
+        # Get location (already resolved above)
+        stmt = select(Location).where(Location.label == location)
+        loc = session.scalar(stmt)
         
         ingestor = DataIngestor(
             session=session,
@@ -504,48 +555,34 @@ def ingest_from_toltec_db(
             
             for row in rows:
                 # Construct file path from toltec_db FileName
-                filename = row['FileName']
+                # Filenames from toltec_db: /data/toltec/ics/toltec0/file.nc or /data_lmt/toltec/clip/...
+                # Goal: Extract relative path starting from 'toltec/', e.g., toltec/ics/toltec0/file.nc
+                t0 = time.time()
+                filename = row.FileName
                 
-                # SQLite filenames: /data_lmt/toltec/tcs/toltec0/file.nc
-                # data_root: ../run/data_lmt/toltec/tcs
-                # We need to strip the common prefix and make relative to data_root
-                
-                # First, strip /data_lmt/ prefix from SQLite path
-                if filename.startswith('/data_lmt/'):
-                    filename_rel = filename[len('/data_lmt/'):]  # toltec/tcs/toltec0/file.nc
-                elif filename.startswith('/data_lmt'):
-                    filename_rel = filename[len('/data_lmt'):].lstrip('/')
-                else:
+                # Find 'toltec/' in the path and extract from there
+                if '/toltec/' in filename:
+                    toltec_idx = filename.index('/toltec/')
+                    filename_rel = filename[toltec_idx + 1:]  # Remove leading slash, result: toltec/...
+                elif filename.startswith('toltec/'):
                     filename_rel = filename
+                else:
+                    # Fallback: use filename as-is if 'toltec/' not found
+                    console.print(f"[yellow]Warning:[/yellow] Could not find 'toltec/' in path: {filename}")
+                    failed += 1
+                    progress.update(task, advance=1)
+                    continue
                 
-                # Now check if data_root contains a subpath that overlaps
-                # data_root might be: /abs/path/data_lmt/toltec/tcs
-                # filename_rel: toltec/tcs/toltec0/file.nc
-                # Need to find the overlap and strip it from filename_rel
-                
-                # data_root is already resolved to absolute path
-                data_root_parts = data_root.parts
-                filename_parts = Path(filename_rel).parts
-                
-                # Find the longest suffix of data_root_parts that matches a prefix of filename_parts
-                # Example: data_root ends with (..., 'toltec', 'tcs')
-                #          filename starts with ('toltec', 'tcs', 'toltec0', ...)
-                #          We want to strip ('toltec', 'tcs') from filename
-                overlap = 0
-                for suffix_len in range(1, min(len(data_root_parts), len(filename_parts)) + 1):
-                    # Check if the last suffix_len parts of data_root match the first suffix_len parts of filename
-                    if data_root_parts[-suffix_len:] == filename_parts[:suffix_len]:
-                        overlap = suffix_len
-                
-                # Strip overlapping parts from filename
-                if overlap > 0:
-                    filename_rel = str(Path(*filename_parts[overlap:]))
-                
+                # Construct full path: data_root + relative path
                 file_path = data_root / filename_rel
+                timings['path_construct'] += time.time() - t0
                 
                 try:
                     # Parse file info from filename
+                    t0 = time.time()
                     file_info = guess_info_from_file(file_path)
+                    timings['parse_file'] += time.time() - t0
+                    
                     if file_info is None:
                         console.print(f"[yellow]Warning:[/yellow] Could not parse filename: {file_path.name}")
                         failed += 1
@@ -554,11 +591,17 @@ def ingest_from_toltec_db(
                     
                     # Get observation datetime from toltec_db Date and Time columns
                     obs_datetime = None
-                    if row['Date'] and row['Time']:
-                        from datetime import datetime
+                    if row.Date and row.Time:
+                        from datetime import datetime, timedelta
                         try:
-                            # Combine Date (YYYY-MM-DD) and Time (HH:MM:SS)
-                            obs_datetime = datetime.fromisoformat(f"{row['Date']} {row['Time']}")
+                            # Handle both MySQL TIME (timedelta) and SQLite TEXT
+                            if isinstance(row.Time, timedelta):
+                                # MySQL returns TIME as timedelta
+                                base_date = datetime.strptime(str(row.Date), "%Y-%m-%d")
+                                obs_datetime = base_date + row.Time
+                            else:
+                                # SQLite returns TIME as TEXT string
+                                obs_datetime = datetime.fromisoformat(f"{row.Date} {row.Time}")
                         except (ValueError, TypeError):
                             pass
                     
@@ -566,16 +609,22 @@ def ingest_from_toltec_db(
                     file_info.obs_datetime = obs_datetime
                     
                     # Ingest file (logical entry created even if file missing)
+                    t0 = time.time()
                     ingestor.ingest_file(file_info)
+                    timings['ingest_file'] += time.time() - t0
                     
+                    t0 = time.time()
                     if file_path.exists():
                         ingested += 1
                     else:
                         missing += 1
+                    timings['file_exists'] += time.time() - t0
                     
                     # Commit periodically
                     if (ingested + missing) % 100 == 0:
+                        t0 = time.time()
                         session.commit()
+                        timings['commit'] += time.time() - t0
                     
                 except Exception as e:
                     console.print(f"[red]Error ingesting {file_path.name}:[/red] {e}")
@@ -584,7 +633,9 @@ def ingest_from_toltec_db(
                 progress.update(task, advance=1)
         
         # Final commit
+        t0 = time.time()
         session.commit()
+        timings['commit'] += time.time() - t0
         
         # Summary
         console.print(f"\n[green]✓[/green] Ingestion complete:")
@@ -593,7 +644,22 @@ def ingest_from_toltec_db(
         console.print(f"  Skipped (existing): {skipped}")
         console.print(f"  Failed: {failed}")
         
-    toltec_conn.close()
+        # Timing breakdown
+        total = sum(timings.values())
+        console.print(f"\n[bold]Performance breakdown (CLI loop):[/bold]")
+        for key, val in timings.items():
+            pct = (val / total * 100) if total > 0 else 0
+            console.print(f"  {key:20s}: {val:6.2f}s ({pct:5.1f}%)")
+        console.print(f"  {'Total':20s}: {total:6.2f}s")
+        
+        # Ingestor internal timings
+        if hasattr(ingestor, '_timings'):
+            console.print(f"\n[bold]Performance breakdown (ingestor.ingest_file):[/bold]")
+            ingestor_total = sum(ingestor._timings.values())
+            for key, val in ingestor._timings.items():
+                pct = (val / ingestor_total * 100) if ingestor_total > 0 else 0
+                console.print(f"  {key:30s}: {val:6.2f}s ({pct:5.1f}%)")
+            console.print(f"  {'Total':30s}: {ingestor_total:6.2f}s")
     
     # Generate associations if requested
     if with_associations and not dry_run:

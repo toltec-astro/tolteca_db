@@ -28,11 +28,20 @@ def init_database(
         bool,
         typer.Option("--registry/--no-registry", help="Populate registry tables"),
     ] = True,
+    data_root: Annotated[
+        Optional[str],
+        typer.Option("--data-root", help="Data root path for LMT location (e.g., /data_lmt). If not provided, location will not be created."),
+    ] = None,
+    location: Annotated[
+        str,
+        typer.Option("--location", help="Location label to create"),
+    ] = "LMT",
 ) -> None:
     """
     Initialize database schema (idempotent).
 
     Creates all tables and optionally populates registry tables.
+    If --data-root is provided, creates a Location entry with that path.
     Safe to run multiple times - will skip if already initialized.
     """
     from sqlalchemy import inspect
@@ -106,21 +115,34 @@ def init_database(
                         )
                         session.add(DataKind(label=kind.name, category=category))
 
-            # Populate Location (LMT)
-            if not session.query(Location).filter(Location.label == "LMT").first():
-                session.add(
-                    Location(
-                        label="LMT",
-                        location_type="filesystem",
-                        root_uri="file:///data/lmt",
-                        priority=10,
-                        meta={
-                            "lon_deg": -97.3149,
-                            "lat_deg": 18.9858,
-                            "alt_m": 4600.0,
-                        },
+            # Populate Location if data_root provided
+            if data_root is not None:
+                # Expand and normalize path (preserve symlinks)
+                import os
+                from pathlib import Path
+                expanded_path = Path(os.path.expanduser(data_root))
+                expanded_path = Path(os.path.normpath(expanded_path.absolute()))
+                root_uri = f"file://{expanded_path}"
+                
+                # Check if location already exists
+                existing_loc = session.query(Location).filter(Location.label == location).first()
+                if not existing_loc:
+                    console.print(f"[green]Creating location '{location}' with data_root:[/green] {expanded_path}")
+                    session.add(
+                        Location(
+                            label=location,
+                            location_type="filesystem",
+                            root_uri=root_uri,
+                            priority=10,
+                            meta={
+                                "lon_deg": -97.3149,
+                                "lat_deg": 18.9858,
+                                "alt_m": 4600.0,
+                            } if location == "LMT" else {},
+                        )
                     )
-                )
+                else:
+                    console.print(f"[yellow]Location '{location}' already exists with root_uri:[/yellow] {existing_loc.root_uri}")
 
             session.commit()
             console.print("[green]✓[/green] Registry tables populated")

@@ -118,6 +118,53 @@ class TelCSVIngestor:
         self.skip_existing = skip_existing
         self.create_data_prods = create_data_prods
         self.commit_batch_size = commit_batch_size
+        
+        # Fetch location to get root_uri for path handling
+        stmt = select(Location).where(Location.pk == location_pk)
+        location = session.execute(stmt).scalar_one_or_none()
+        if location is None:
+            raise ValueError(f"Location with pk={location_pk} not found")
+        self.location_root_path = self._parse_root_uri(location.root_uri)
+    
+    @staticmethod
+    def _parse_root_uri(root_uri: str) -> Path:
+        """Parse root URI to filesystem path.
+        
+        Parameters
+        ----------
+        root_uri : str
+            Location root URI (e.g., 'file:///data/lmt')
+        
+        Returns
+        -------
+        Path
+            Filesystem path
+        """
+        if root_uri.startswith('file://'):
+            return Path(root_uri.replace('file://', '', 1))
+        return Path(root_uri)
+    
+    def _make_relative_uri(self, file_path: Path) -> str:
+        """Create source URI relative to location root.
+        
+        Parameters
+        ----------
+        file_path : Path
+            Absolute file path
+        
+        Returns
+        -------
+        str
+            Relative file path
+        """
+        try:
+            # Make path relative to location root
+            # Use absolute() to preserve symlinks
+            rel_path = file_path.absolute().relative_to(self.location_root_path.absolute())
+            return str(rel_path)
+        except ValueError:
+            # File is not under location root - use absolute path
+            return str(file_path.absolute())
     
     def ingest_csv(self, csv_path: Path | str) -> TelIngestStats:
         """Ingest tel metadata from CSV file.
@@ -235,24 +282,24 @@ class TelCSVIngestor:
                 
                 # Check if tel source already exists (check by filename-based URI)
                 # Filename from CSV: /data_lmt/tel/tel_toltec_2022-01-14_093026_00_0001.nc
-                # We want relative path from location root: tel/tel_toltec_*.nc
-                from pathlib import Path
-                filename_path = Path(row.filename)
+                # Convert to relative path using location root: tel/tel_toltec_*.nc
+                # Filenames from LMTMC CSV: /data_lmt/tel/tel_toltec_*.nc
+                # Goal: Extract relative path starting from 'tel/', e.g., tel/tel_toltec_*.nc
+                filename = row.filename
                 
-                # Extract relative path from /data_lmt/ onwards
-                # Example: /data_lmt/tel/file.nc → tel/file.nc
-                try:
-                    # Find 'data_lmt' in path and take everything after it
-                    parts = filename_path.parts
-                    if 'data_lmt' in parts:
-                        data_lmt_idx = parts.index('data_lmt')
-                        rel_parts = parts[data_lmt_idx + 1:]  # Skip 'data_lmt' itself
-                        source_uri = str(Path(*rel_parts))
-                    else:
-                        # Fallback: use filename as-is
-                        source_uri = row.filename
-                except (ValueError, IndexError):
-                    source_uri = row.filename
+                # Find 'tel/' in the path and extract from there
+                if '/tel/' in filename:
+                    tel_idx = filename.index('/tel/')
+                    filename_rel = filename[tel_idx + 1:]  # Remove leading slash, result: tel/...
+                elif filename.startswith('tel/'):
+                    filename_rel = filename
+                else:
+                    # Fallback: if 'tel/' not found, try to use filename as-is
+                    filename_rel = str(Path(filename).name)  # Just use the filename
+                    filename_rel = f'tel/{filename_rel}'  # Prepend tel/
+                
+                # Store the relative path directly as source_uri
+                source_uri = filename_rel
                 
                 if self.skip_existing:
                     stmt = select(DataProdSource).where(

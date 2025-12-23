@@ -338,20 +338,23 @@ def process_interface_data(
 
     # Set observation datetime from toltec_db Date and Time columns
     if row.date and row.time:
-        from datetime import datetime
+        from datetime import datetime, timedelta
+        import logging
 
-        # Combine Date and Time into ISO format datetime
-        # Date format: 'YYYY-MM-DD', Time format: 'HH:MM:SS'
-        obs_datetime_str = f"{row.date}T{row.time}"
+        logger = logging.getLogger(__name__)
         try:
-            file_info.obs_datetime = datetime.fromisoformat(obs_datetime_str)
-        except ValueError:
+            # Handle both MySQL TIME (timedelta) and SQLite TEXT
+            if isinstance(row.time, timedelta):
+                # MySQL returns TIME as timedelta
+                base_date = datetime.strptime(str(row.date), "%Y-%m-%d")
+                file_info.obs_datetime = base_date + row.time
+            else:
+                # SQLite returns TIME as TEXT string
+                file_info.obs_datetime = datetime.fromisoformat(f"{row.date} {row.time}")
+        except (ValueError, TypeError) as e:
             # If parsing fails, log warning but continue
-            import logging
-
-            logger = logging.getLogger(__name__)
             logger.warning(
-                f"Could not parse observation datetime from Date={row.date}, Time={row.time}"
+                f"Could not parse observation datetime from Date={row.date}, Time={row.time}: {e}"
             )
 
     # Use DataIngestor to create DataProd + DataProdSource

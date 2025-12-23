@@ -158,11 +158,12 @@ class DataIngestor:
         """
         try:
             # Make path relative to location root
-            rel_path = file_path.resolve().relative_to(self.location_root_path.resolve())
+            # Use absolute() instead of resolve() to preserve symlinks
+            rel_path = file_path.absolute().relative_to(self.location_root_path.absolute())
             return str(rel_path)
         except ValueError:
             # File is not under location root - use absolute path
-            return str(file_path.resolve())
+            return str(file_path.absolute())
     
     def ingest_file(
         self,
@@ -190,28 +191,48 @@ class DataIngestor:
         tuple[DataProd | None, DataProdSource | None]
             Created DataProd and DataProdSource, or (None, None) if skipped
         """
+        import time
+        if not hasattr(self, '_timings'):
+            self._timings = {
+                'make_relative_uri': 0,
+                'check_existing': 0,
+                'file_exists': 0,
+                'get_or_create_raw_obs': 0,
+                'create_source': 0,
+            }
+        
         # Build source URI relative to location root
+        t0 = time.time()
         source_uri = self._make_relative_uri(file_info.filepath)
+        self._timings['make_relative_uri'] += time.time() - t0
         
         # Check if source already exists
         if skip_existing:
+            t0 = time.time()
             stmt = select(DataProdSource).where(DataProdSource.source_uri == source_uri)
             existing = self.session.scalar(stmt)
+            self._timings['check_existing'] += time.time() - t0
             if existing is not None:
                 return None, None
         
         # Check if file exists
+        t0 = time.time()
         file_exists = file_info.filepath.exists()
+        self._timings['file_exists'] += time.time() - t0
         
         # Get or create raw observation DataProd
+        t0 = time.time()
         data_prod = self._get_or_create_raw_obs(
             file_info,
             obs_goal=obs_goal,
             source_name=source_name,
         )
+        self._timings['get_or_create_raw_obs'] += time.time() - t0
         
         # Create DataProdSource
+        t0 = time.time()
         source = self._create_source(file_info, data_prod.pk, source_uri, file_exists=file_exists)
+        self._timings['create_source'] += time.time() - t0
         
         return data_prod, source
     
@@ -359,12 +380,13 @@ class DataIngestor:
         """
         # Calculate file metadata if file exists
         if file_exists:
+            import time
+            t0 = time.time()
             file_size = file_info.filepath.stat().st_size
-            checksum = _compute_file_hash(file_info.filepath)
+            self._timings['stat'] = self._timings.get('stat', 0) + (time.time() - t0)
             availability_state = "available"
         else:
             file_size = None
-            checksum = None
             availability_state = "missing"
         
         # Create RoachInterfaceMeta
@@ -384,7 +406,7 @@ class DataIngestor:
             source_uri=source_uri,
             location_fk=self.location_pk,
             data_prod_fk=data_prod_pk,
-            checksum=checksum,
+            checksum=None,
             size=file_size,
             availability_state=availability_state,
             meta=interface_meta,
@@ -402,28 +424,3 @@ class DataIngestor:
         
         if dk is not None and dk not in data_prod.data_kinds:
             data_prod.data_kinds.append(dk)
-
-
-def _compute_file_hash(filepath: Path, algorithm: str = "sha256") -> str:
-    """Compute file content hash.
-    
-    Parameters
-    ----------
-    filepath : Path
-        File to hash
-    algorithm : str, optional
-        Hash algorithm, by default "sha256"
-    
-    Returns
-    -------
-    str
-        Hex digest of file hash
-    """
-    hasher = hashlib.new(algorithm)
-    
-    with filepath.open("rb") as f:
-        # Read in chunks to handle large files
-        while chunk := f.read(8192):
-            hasher.update(chunk)
-    
-    return hasher.hexdigest()
