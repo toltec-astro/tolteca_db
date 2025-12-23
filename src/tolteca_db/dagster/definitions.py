@@ -83,15 +83,15 @@ def get_definitions(test_mode: bool = False) -> Definitions:
         # Production mode: Use environment variables
         resources = {
             "toltec_db": ToltecDBResource(
-                database_url=EnvVar("TOLTEC_DB_PATH"),
+                database_url=EnvVar("TOLTEC_DB_URL"),
             ),
             "tolteca_db": ToltecaDBResource(
-                database_url=EnvVar("TOLTECA_DB_PATH"),
+                database_url=EnvVar("TOLTECA_DB_URL"),
             ),
             "location": LocationConfig(
                 location_pk="LMT",
                 location_name="Large Millimeter Telescope",
-                data_root=EnvVar("TOLTEC_DATA_ROOT"),
+                data_root=EnvVar("TOLTECA_WEB_DATA_LMT_ROOTPATH"),
             ),
             "validation": ValidationConfig(
                 max_interface_count=13,
@@ -219,40 +219,48 @@ def get_test_definitions(
     )
 
 
-# Default definitions (test mode with simulator for development)
-# Override by creating a workspace.yaml with production config
+# Default definitions - check TOLTECA_SIMULATOR_ENABLED to determine mode
+# If simulator is enabled (or not specified), use test mode with simulator
+# If simulator is disabled, use production mode without simulator
 
-# Parse obsnum filter from environment (comma-separated list)
-_obsnum_filter_str = EnvVar("TOLTECA_SIMULATOR_OBSNUMS").get_value("")
-_obsnum_filter = None
-if _obsnum_filter_str:
-    try:
-        _obsnum_filter = [int(x.strip()) for x in _obsnum_filter_str.split(",") if x.strip()]
-    except ValueError:
-        pass  # Invalid format, use None
+_simulator_enabled = EnvVar("TOLTECA_SIMULATOR_ENABLED").get_value("true").lower() in ("true", "1", "yes")
 
-# Get date filter from environment (format: YYYY-MM-DD)
-_date_filter = EnvVar("TOLTECA_SIMULATOR_DATE").get_value("")
-if not _date_filter:
-    _date_filter = None
+if _simulator_enabled:
+    # Test mode with simulator for development
+    # Parse obsnum filter from environment (comma-separated list)
+    _obsnum_filter_str = EnvVar("TOLTECA_SIMULATOR_OBSNUMS").get_value("")
+    _obsnum_filter = None
+    if _obsnum_filter_str:
+        try:
+            _obsnum_filter = [int(x.strip()) for x in _obsnum_filter_str.split(",") if x.strip()]
+        except ValueError:
+            pass  # Invalid format, use None
 
-# Get CSV paths from environment
-_source_csv_path = EnvVar("LMTMC_CSV_SOURCE").get_value("")
-if not _source_csv_path:
-    _source_csv_path = None
+    # Get date filter from environment (format: YYYY-MM-DD)
+    _date_filter = EnvVar("TOLTECA_SIMULATOR_DATE").get_value("")
+    if not _date_filter:
+        _date_filter = None
 
-_test_csv_path = EnvVar("LMTMC_CSV_TEST").get_value("")
-if not _test_csv_path:
-    _test_csv_path = None
+    # Get CSV paths from environment
+    _source_csv_path = EnvVar("LMTMC_CSV_SOURCE").get_value("")
+    if not _source_csv_path:
+        _source_csv_path = None
 
-defs = get_test_definitions(
-    source_db_url=EnvVar("TOLTEC_DB_SOURCE_URL").get_value(
-        "sqlite:///../run/toltecdb_last_30days.sqlite"
-    ),
-    integration_time_seconds=float(EnvVar("TOLTECA_SIMULATOR_INTEGRATION_TIME").get_value("15.0")),
-    date_filter=_date_filter,
-    obsnum_filter=_obsnum_filter,
-    data_root=EnvVar("TOLTECA_WEB_DATA_LMT_ROOTPATH").get_value(None),
-    source_csv_path=_source_csv_path,
-    test_csv_path=_test_csv_path,
-)
+    _test_csv_path = EnvVar("LMTMC_CSV_TEST").get_value("")
+    if not _test_csv_path:
+        _test_csv_path = None
+
+    defs = get_test_definitions(
+        source_db_url=EnvVar("TOLTEC_DB_SOURCE_URL").get_value(
+            "sqlite:///../run/toltecdb_last_30days.sqlite"
+        ),
+        integration_time_seconds=float(EnvVar("TOLTECA_SIMULATOR_INTEGRATION_TIME").get_value("15.0")),
+        date_filter=_date_filter,
+        obsnum_filter=_obsnum_filter,
+        data_root=EnvVar("TOLTECA_WEB_DATA_LMT_ROOTPATH").get_value(None),
+        source_csv_path=_source_csv_path,
+        test_csv_path=_test_csv_path,
+    )
+else:
+    # Production mode - no simulator, use real databases
+    defs = get_definitions(test_mode=False)

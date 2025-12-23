@@ -56,6 +56,8 @@ def query_toltec_db_since(
 
     # Query all observations with timestamp >= since_dt
     # Note: Column names are case-sensitive (RoachIndex, not roach_index)
+    # Use database-agnostic SQL: STR_TO_DATE() for MySQL, datetime() for SQLite
+    # Both support CONCAT() for string concatenation
     query = text(
         f"""
         SELECT 
@@ -70,12 +72,12 @@ def query_toltec_db_since(
             toltec.Time as time
         FROM {table_name} AS toltec
         JOIN master ON toltec.Master = master.id
-        WHERE datetime(toltec.Date || ' ' || toltec.Time) >= datetime(:since_dt)
+        WHERE CONCAT(toltec.Date, ' ', toltec.Time) >= :since_dt
         ORDER BY toltec.id ASC
         """
     )
 
-    result = session.execute(query, {"since_dt": since_dt})
+    result = session.execute(query, {"since_dt": since_dt.strftime("%Y-%m-%d %H:%M:%S")})
     rows = result.fetchall()
 
     # Convert to list of dicts
