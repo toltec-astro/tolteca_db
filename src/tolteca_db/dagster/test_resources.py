@@ -269,6 +269,15 @@ class TestToltecDBResource(ConfigurableResource):
                     context.log.info(
                         f"Converted {table.name}.{column.name} from TIME to TEXT"
                     )
+                
+                # CRITICAL: Remove autoincrement from id column to allow explicit inserts
+                # In SQLite, INTEGER PRIMARY KEY is auto-increment by default
+                # We need to copy exact id values from source, not auto-generate
+                if column.name == "id" and column.primary_key:
+                    column.autoincrement = False
+                    context.log.info(
+                        f"Disabled autoincrement for {table.name}.{column.name} (allow explicit inserts)"
+                    )
 
         # Fix index name conflicts (e.g., index "ObsType" conflicts with table "obstype")
         # SQLite is case-insensitive, so rename indexes that conflict with table names

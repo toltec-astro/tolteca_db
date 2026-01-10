@@ -300,10 +300,10 @@ def quartet_sensor(context: SensorEvaluationContext):
         }
 
     # Initialize validation tracker with saved state from cursor
+    timeout_value = getattr(validation, "validation_timeout_seconds", 30.0)
+    context.log.info(f"Using validation timeout: {timeout_value}s")
     tracker = QuartetValidationTracker(
-        validation_timeout_seconds=getattr(
-            validation, "validation_timeout_seconds", 30.0
-        )
+        validation_timeout_seconds=timeout_value
     )
     # Restore saved states
     tracker.quartet_states = saved_states

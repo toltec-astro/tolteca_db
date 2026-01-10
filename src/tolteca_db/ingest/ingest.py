@@ -309,6 +309,9 @@ class DataIngestor:
         
         Creates a single DataProd per (master, obsnum, subobsnum, scannum) combination.
         Multiple interface files link to the same DataProd.
+        
+        Uses optimistic locking to handle concurrent inserts: tries to create, and if
+        that fails due to race condition, queries for the existing record.
         """
         # Check if already exists by querying metadata
         stmt = (
@@ -345,7 +348,25 @@ class DataIngestor:
         )
         
         self.session.add(data_prod)
-        self.session.flush()  # Get auto-assigned pk
+        
+        try:
+            self.session.flush()  # Get auto-assigned pk
+        except Exception as e:
+            # Handle race condition: another process created the same DataProd
+            # Roll back this transaction and query for the existing record
+            self.session.rollback()
+            
+            # Query again for existing DataProd
+            existing = self.session.scalar(stmt)
+            if existing is not None:
+                return existing
+            
+            # If still not found, this is a real error
+            raise RuntimeError(
+                f"Failed to create DataProd for {self.master}-{file_info.obsnum}-"
+                f"{file_info.subobsnum}-{file_info.scannum} and query found nothing. "
+                f"Original error: {e}"
+            ) from e
         
         # Link to DataKind if known (skip for now - data_kind stored in meta as int)
         # if file_info.data_kind:

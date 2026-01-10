@@ -179,7 +179,9 @@ def get_test_definitions(
         "validation": ValidationConfig(
             max_interface_count=13,
             disabled_interfaces=[1, 6],
-            validation_timeout_seconds=10.0,  # Shorter for testing
+            validation_timeout_seconds=float(
+                EnvVar("TOLTECA_VALIDATION_TIMEOUT").get_value("15.0")
+            ),  # Configurable via environment
             sensor_poll_interval_seconds=2,  # More frequent for testing
         ),
         "simulator": SimulatorConfig(

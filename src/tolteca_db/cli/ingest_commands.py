@@ -537,13 +537,7 @@ def ingest_from_toltec_db(
         # Get location (already resolved above)
         stmt = select(Location).where(Location.label == location)
         loc = session.scalar(stmt)
-        
-        ingestor = DataIngestor(
-            session=session,
-            location_pk=location,
-            master=master,
-            nw_id=0,
-        )
+        # Note: Create DataIngestor for each file to use the correct master from database
         
         ingested = 0
         skipped = 0
@@ -607,6 +601,18 @@ def ingest_from_toltec_db(
                     
                     # Override file_info.obs_datetime with toltec_db value
                     file_info.obs_datetime = obs_datetime
+                    
+                    # Use master from database query (row.master_label), not CLI argument
+                    # This ensures ICS files get master='ics', TCS files get master='tcs', etc.
+                    row_master = row.master_label if hasattr(row, 'master_label') and row.master_label else master
+                    
+                    # Create DataIngestor with correct master for this file
+                    ingestor = DataIngestor(
+                        session=session,
+                        location_pk=location,
+                        master=row_master,
+                        nw_id=0,
+                    )
                     
                     # Ingest file (logical entry created even if file missing)
                     t0 = time.time()

@@ -186,7 +186,20 @@ def query_quartet_status(
     interfaces = []
     for row in rows:
         # Combine date and time into timestamp
-        timestamp = datetime.fromisoformat(f"{row.date} {row.time}")
+        # Handle both string and timedelta time types (MySQL returns timedelta)
+        if isinstance(row.time, str):
+            time_str = row.time
+            # Handle times with missing leading zeros (e.g., "3:47:13" → "03:47:13")
+            if len(time_str.split(':')[0]) == 1:
+                time_str = f"0{time_str}"
+            timestamp = datetime.fromisoformat(f"{row.date} {time_str}")
+        else:
+            # MySQL returns time as timedelta - combine with date
+            from datetime import timedelta
+            if isinstance(row.time, timedelta):
+                timestamp = datetime.combine(row.date, datetime.min.time()) + row.time
+            else:
+                timestamp = datetime.fromisoformat(f"{row.date} {row.time}")
 
         interfaces.append(
             {
@@ -442,6 +455,15 @@ def process_interface_data(
             )
             existing = tdb_session.scalar(stmt)
 
+            if not existing:
+                # This shouldn't happen - ingest_file returned None (skip_existing=True)
+                # but query can't find the existing DataProd. This indicates a bug.
+                raise RuntimeError(
+                    f"DataProd not found for {master}-{obsnum}-{subobsnum}-{scannum}. "
+                    f"ingest_file returned None (skip_existing) but query found nothing. "
+                    f"This may indicate a master mismatch or database inconsistency."
+                )
+
             # Calculate source_uri
             source_uri = ingestor._make_relative_uri(file_path)
 
@@ -449,7 +471,7 @@ def process_interface_data(
                 "rows_processed": 0,
                 "duration_seconds": duration,
                 "status": "success",
-                "data_prod_pk": str(existing.pk) if existing else "unknown",
+                "data_prod_pk": str(existing.pk),
                 "source_uri": source_uri,
             }
 

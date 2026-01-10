@@ -111,34 +111,63 @@ def acquisition_simulator(context: AssetExecutionContext) -> Output[str]:
                 f"{latest_quartet.SubObsNum}-{latest_quartet.ScanNum}"
             )
 
-        # Some interfaces still invalid - mark them all as valid
-        context.log.info(
-            f"Latest quartet {latest_quartet.ObsNum}-{latest_quartet.SubObsNum}-"
-            f"{latest_quartet.ScanNum} has {latest_quartet.invalid_count}/"
-            f"{latest_quartet.interface_count} invalid - marking all Valid=1"
-        )
+        # Some interfaces still invalid - mark them incrementally in time order
+        # This simulates the rolling acquisition where interfaces become valid over time
+        
+        # Determine how many to validate this tick
+        # For 11 interfaces total, validate in 2 ticks: ~6 first, then remaining
+        if latest_quartet.invalid_count == latest_quartet.interface_count:
+            # First validation - mark first half (rounded up)
+            batch_size = (latest_quartet.interface_count + 1) // 2
+            context.log.info(
+                f"Latest quartet {latest_quartet.ObsNum}-{latest_quartet.SubObsNum}-"
+                f"{latest_quartet.ScanNum} starting validation ({latest_quartet.invalid_count} invalid) "
+                f"- marking first {batch_size} interfaces Valid=1 in time order"
+            )
+        else:
+            # Second validation - mark remaining interfaces
+            batch_size = latest_quartet.invalid_count
+            context.log.info(
+                f"Latest quartet {latest_quartet.ObsNum}-{latest_quartet.SubObsNum}-"
+                f"{latest_quartet.ScanNum} completing validation ({latest_quartet.invalid_count} remaining) "
+                f"- marking final {batch_size} interfaces Valid=1 in time order"
+            )
 
-        result = session.execute(
+        # Get next batch of interfaces to validate, ordered by original timestamp
+        interfaces_to_validate = session.execute(
             text("""
-            UPDATE toltec
-            SET Valid = 1
-            WHERE ObsNum = :obsnum
-              AND SubObsNum = :subobsnum
-              AND ScanNum = :scannum
-              AND Master = :master
-              AND Valid = 0
-        """),
+                SELECT id
+                FROM toltec
+                WHERE ObsNum = :obsnum
+                  AND SubObsNum = :subobsnum
+                  AND ScanNum = :scannum
+                  AND Master = :master
+                  AND Valid = 0
+                ORDER BY Date, Time, id
+                LIMIT :batch_size
+            """),
             {
                 "obsnum": latest_quartet.ObsNum,
                 "subobsnum": latest_quartet.SubObsNum,
                 "scannum": latest_quartet.ScanNum,
                 "master": latest_quartet.Master,
+                "batch_size": batch_size,
             },
-        )
+        ).fetchall()
 
-        session.commit()
-
-        updated_count = result.rowcount
+        if interfaces_to_validate:
+            ids_to_validate = [row.id for row in interfaces_to_validate]
+            result = session.execute(
+                text(f"""
+                    UPDATE toltec
+                    SET Valid = 1
+                    WHERE id IN ({','.join(str(i) for i in ids_to_validate)})
+                """)
+            )
+            session.commit()
+            updated_count = result.rowcount
+        else:
+            updated_count = 0
 
         # Check if this completes the obsnum filter
         if obsnum_filter:
@@ -208,14 +237,13 @@ def _insert_next_quartet_from_source_db(
     """
     from sqlalchemy import create_engine
 
-    # Get last inserted quartet from test db
-    last_quartet = test_session.execute(
-        text("""
-        SELECT MAX(ObsNum) as obsnum, MAX(SubObsNum) as subobsnum, 
-               MAX(ScanNum) as scannum
-        FROM toltec
-    """)
+    # Get highest id in test database - this is our cursor
+    # Since we copy exact id values from source, this tracks our progress
+    max_test_id_result = test_session.execute(
+        text("SELECT MAX(id) as max_id FROM toltec")
     ).fetchone()
+    
+    last_source_id = max_test_id_result.max_id if max_test_id_result.max_id else 0
 
     # Connect to source database and get next quartet
     source_engine = create_engine(source_db_url)
@@ -227,40 +255,22 @@ def _insert_next_quartet_from_source_db(
             obsnum_list_str = ",".join(str(obs) for obs in obsnum_filter)
             obsnum_filter_clause = f" AND ObsNum IN ({obsnum_list_str})"
 
-        # Get next distinct quartet from source db
-        if last_quartet.obsnum is None:
-            # Empty db - get first quartet
-            next_quartet_query = text(f"""
-                SELECT DISTINCT ObsNum, SubObsNum, ScanNum, Master
-                FROM toltec
-                WHERE 1=1{obsnum_filter_clause}
-                ORDER BY ObsNum ASC, SubObsNum ASC, ScanNum ASC
-                LIMIT 1
-            """)
-        else:
-            # Get next quartet after the last one inserted
-            next_quartet_query = text(f"""
-                SELECT DISTINCT ObsNum, SubObsNum, ScanNum, Master
-                FROM toltec
-                WHERE ((ObsNum > :last_obsnum)
-                   OR (ObsNum = :last_obsnum AND SubObsNum > :last_subobsnum)
-                   OR (ObsNum = :last_obsnum AND SubObsNum = :last_subobsnum 
-                       AND ScanNum > :last_scannum)){obsnum_filter_clause}
-                ORDER BY ObsNum ASC, SubObsNum ASC, ScanNum ASC
-                LIMIT 1
-            """)
-
-        if last_quartet.obsnum is None:
-            next_quartet = source_session.execute(next_quartet_query).fetchone()
-        else:
-            next_quartet = source_session.execute(
-                next_quartet_query,
-                {
-                    "last_obsnum": last_quartet.obsnum,
-                    "last_subobsnum": last_quartet.subobsnum,
-                    "last_scannum": last_quartet.scannum,
-                },
-            ).fetchone()
+        # Get next quartet from source with id > last copied id
+        # Order by id ensures chronological insertion (id is auto-increment in source)
+        next_quartet_query = text(f"""
+            SELECT DISTINCT ObsNum, SubObsNum, ScanNum, Master, 
+                   MIN(id) as min_id, MIN(Date) as Date, MIN(Time) as Time
+            FROM toltec
+            WHERE id > :last_id{obsnum_filter_clause}
+            GROUP BY ObsNum, SubObsNum, ScanNum, Master
+            ORDER BY min_id ASC
+            LIMIT 1
+        """)
+        
+        next_quartet = source_session.execute(
+            next_quartet_query,
+            {"last_id": last_source_id}
+        ).fetchone()
 
         if next_quartet is None:
             context.log.warning("No more quartets available in source database")
@@ -274,6 +284,7 @@ def _insert_next_quartet_from_source_db(
                   AND SubObsNum = :subobsnum
                   AND ScanNum = :scannum
                   AND Master = :master
+                ORDER BY id ASC
             """),
             {
                 "obsnum": next_quartet.ObsNum,
@@ -286,7 +297,9 @@ def _insert_next_quartet_from_source_db(
         # Insert all interfaces into test db with Valid=0
         for entry in interface_entries:
             entry_dict = dict(entry._mapping)
+            
             # Override Valid to 0 for simulation
+            # Keep original id from source for exact replication
             entry_dict["Valid"] = 0
 
             # Convert timedelta to string for SQLite compatibility (MySQL TIME → TEXT)
