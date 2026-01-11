@@ -364,6 +364,7 @@ def query_lmtmc_csv(
     
     # Cache response
     cache_path = _get_cache_path(start_date, end_date, cache_dir)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
     cache_path.write_text(response.text, encoding="utf-8")
     
     return cache_path

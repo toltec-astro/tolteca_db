@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -788,6 +789,10 @@ def from_tel_csv(
         bool,
         typer.Option("--force-refresh", help="Force API query (ignore cache)"),
     ] = False,
+    cache_dir: Annotated[
+        Optional[str],
+        typer.Option("--cache-dir", help="Cache directory for CSV files (default: DAGSTER_HOME/lmtmc_cache)"),
+    ] = None,
 ) -> None:
     """
     Ingest LMT telescope metadata from CSV file or LMTMC API.
@@ -862,10 +867,13 @@ def from_tel_csv(
         
         console.print(f"[bold blue]Querying LMTMC API:[/bold blue] {start_date} to {end_date}")
         
+        console.print(f"[bold blue]Querying LMTMC API:[/bold blue] {start_date} to {end_date}")
+        
         try:
             csv_path = query_lmtmc_csv(
                 start_date=start_date,
                 end_date=end_date,
+                cache_dir=Path(cache_dir) if cache_dir else None,
                 api_base_url=api_url,
                 force_refresh=force_refresh,
             )
