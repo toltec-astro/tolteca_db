@@ -397,8 +397,14 @@ class DataIngestor:
         Returns
         -------
         DataProdSource
-            Created source entry
+            Created or existing source entry
         """
+        # Check if source already exists (handles race condition case)
+        stmt = select(DataProdSource).where(DataProdSource.source_uri == source_uri)
+        existing_source = self.session.scalar(stmt)
+        if existing_source is not None:
+            return existing_source
+        
         # Calculate file metadata if file exists
         if file_exists:
             import time

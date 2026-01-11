@@ -616,8 +616,12 @@ def ingest_from_toltec_db(
                     
                     # Ingest file (logical entry created even if file missing)
                     t0 = time.time()
-                    ingestor.ingest_file(file_info)
+                    data_prod, source = ingestor.ingest_file(file_info, skip_existing=skip_existing)
                     timings['ingest_file'] += time.time() - t0
+                    
+                    # Track skipped files
+                    if data_prod is None and source is None:
+                        skipped += 1
                     
                     t0 = time.time()
                     if file_path.exists():
