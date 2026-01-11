@@ -301,14 +301,19 @@ class TelCSVIngestor:
                 # Store the relative path directly as source_uri
                 source_uri = filename_rel
                 
-                if self.skip_existing:
-                    stmt = select(DataProdSource).where(
-                        DataProdSource.source_uri == source_uri
-                    )
-                    existing = self.session.execute(stmt).scalar_one_or_none()
-                    if existing:
+                # Check if source already exists
+                stmt = select(DataProdSource).where(
+                    DataProdSource.source_uri == source_uri
+                )
+                existing_source = self.session.execute(stmt).scalar_one_or_none()
+                if existing_source is not None:
+                    if self.skip_existing:
                         stats.rows_skipped += 1
                         continue
+                    # If skip_existing=False, still skip to avoid IntegrityError
+                    # (duplicate sources are not meaningful)
+                    stats.rows_skipped += 1
+                    continue
                 
                 # Create DataProdSource for tel file
                 # Note: We don't check if file actually exists - availability_state will be "UNKNOWN"
@@ -323,12 +328,28 @@ class TelCSVIngestor:
                 )
                 
                 self.session.add(source)
-                stats.sources_created += 1
-                stats.rows_ingested += 1
                 
-                # Commit in batches
-                if stats.sources_created % self.commit_batch_size == 0:
-                    self.session.commit()
+                try:
+                    self.session.flush()  # Detect IntegrityError early
+                    stats.sources_created += 1
+                    stats.rows_ingested += 1
+                    
+                    # Commit in batches
+                    if stats.sources_created % self.commit_batch_size == 0:
+                        self.session.commit()
+                except Exception as e:
+                    # Handle race condition: another transaction created the source
+                    self.session.rollback()
+                    # Re-check if source exists now
+                    existing_source = self.session.execute(stmt).scalar_one_or_none()
+                    if existing_source is not None:
+                        # Source was created by another transaction, skip it
+                        stats.rows_skipped += 1
+                        continue
+                    # If still not found, this is a real error
+                    print(f"Failed to ingest row (obsnum={row.obsnum}): {e}")
+                    stats.rows_failed += 1
+                    continue
             
             except Exception as e:
                 print(f"Failed to ingest row (obsnum={row.obsnum}): {e}")
