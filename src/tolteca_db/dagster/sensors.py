@@ -157,6 +157,20 @@ def quartet_sensor(context: SensorEvaluationContext):
     - Query only checks enabled interfaces
     - Disabled interfaces are ignored
 
+    Configuration
+    -------------
+    Environment Variables:
+    - DAGSTER_SENSOR_START_DATE: Start date for sensor to consider (YYYY-MM-DD)
+      - Limits how far back sensor looks in toltec_db
+      - Independent of batch ingestion start date
+      - Useful to avoid processing all historical entries on startup
+      - Defaults to 7 days ago if not set
+    - QUARTET_SENSOR_BATCH_SIZE: Max quartets to process per sensor tick (default: 50)
+      - Prevents timeout on large backlogs
+    
+    Priority order: DAGSTER_SENSOR_START_DATE > TOLTECA_SIMULATOR_DATE > 
+                    TOLTECA_INGEST_START_DATE > 7 days ago
+
     Parameters
     ----------
     context : SensorEvaluationContext
@@ -175,6 +189,10 @@ def quartet_sensor(context: SensorEvaluationContext):
 
     Manual trigger for testing:
     >>> # dagster sensor test quartet_sensor
+    
+    Limit sensor to recent data:
+    >>> # export DAGSTER_SENSOR_START_DATE=2026-01-01
+    >>> # dagster sensor test quartet_sensor
     """
     from .helpers import query_toltec_db_since
 
@@ -183,15 +201,29 @@ def quartet_sensor(context: SensorEvaluationContext):
     import json
     import os
 
-    # Use same date range as batch ingestion for consistency
-    # Priority: TOLTECA_SIMULATOR_DATE > TOLTECA_INGEST_START_DATE > default (7 days ago)
-    default_start_date = os.getenv("TOLTECA_SIMULATOR_DATE") or os.getenv(
-        "TOLTECA_INGEST_START_DATE"
+    # Sensor start date configuration (independent of ingestion)
+    # Priority: DAGSTER_SENSOR_START_DATE > TOLTECA_SIMULATOR_DATE > TOLTECA_INGEST_START_DATE > default (7 days ago)
+    # DAGSTER_SENSOR_START_DATE: Sensor-specific start date (limits how far back sensor looks)
+    # TOLTECA_SIMULATOR_DATE: Simulator mode date
+    # TOLTECA_INGEST_START_DATE: Batch ingestion start date
+    default_start_date = (
+        os.getenv("DAGSTER_SENSOR_START_DATE") 
+        or os.getenv("TOLTECA_SIMULATOR_DATE") 
+        or os.getenv("TOLTECA_INGEST_START_DATE")
     )
     if not default_start_date:
         # Fallback to 7 days ago (same as run_ingest_all.sh)
         from datetime import timedelta
         default_start_date = (datetime.now(timezone.utc) - timedelta(days=7)).date().isoformat()
+        context.log.info(f"No sensor start date configured, defaulting to 7 days ago: {default_start_date}")
+    else:
+        # Log which environment variable was used
+        if os.getenv("DAGSTER_SENSOR_START_DATE"):
+            context.log.info(f"Using sensor-specific start date (DAGSTER_SENSOR_START_DATE): {default_start_date}")
+        elif os.getenv("TOLTECA_SIMULATOR_DATE"):
+            context.log.info(f"Using simulator date (TOLTECA_SIMULATOR_DATE): {default_start_date}")
+        elif os.getenv("TOLTECA_INGEST_START_DATE"):
+            context.log.info(f"Using ingestion start date (TOLTECA_INGEST_START_DATE): {default_start_date}")
     
     # Ensure ISO format with timezone
     if "T" not in default_start_date:
