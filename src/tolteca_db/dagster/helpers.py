@@ -541,10 +541,27 @@ def add_tel_csv_metadata(
             }
     else:
         # Query API for CSV data
-        # Get date from environment variable (set by simulator or config)
+        # Get date from environment variable (set by simulator) or from DataProd
         obs_date = os.getenv("TOLTECA_SIMULATOR_DATE")
+        
         if not obs_date:
-            return {"added": False, "source_uri": None, "status": "no_obs_date"}
+            # Extract observation date from DataProd metadata
+            from datetime import datetime
+            with tolteca_db.get_session() as session:
+                stmt = select(DataProd).where(DataProd.pk == data_prod_pk)
+                data_prod = session.scalar(stmt)
+                
+                if not data_prod:
+                    return {"added": False, "source_uri": None, "status": "data_prod_not_found"}
+                
+                if not data_prod.meta:
+                    return {"added": False, "source_uri": None, "status": "no_meta"}
+                
+                if not hasattr(data_prod.meta, 'obs_datetime') or not data_prod.meta.obs_datetime:
+                    return {"added": False, "source_uri": None, "status": "no_obs_datetime_in_meta"}
+                
+                # Extract date portion (YYYY-MM-DD) from datetime object
+                obs_date = data_prod.meta.obs_datetime.strftime("%Y-%m-%d")
 
         try:
             # Query API for the observation date
