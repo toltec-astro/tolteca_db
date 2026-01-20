@@ -404,6 +404,38 @@ class AstigGroupMeta(DataProdMetaBase, ObsIdMixin):
 
 
 @dataclass
+class OofGroupMeta(DataProdMetaBase, ObsIdMixin):
+    """Metadata for dp_oof_group (Out-of-Focus holography).
+
+    Attributes
+    ----------
+    tag : Literal["oof_group"]
+        Discriminator for union type deserialization
+    n_items : int
+        Number of raw observations in group
+    oof_positions : list[float] | None
+        Out-of-focus positions sampled (defocus values)
+    surface_rms : float | None
+        Measured surface RMS from holography
+    oof_metric : str | None
+        Metric used for analysis
+    obs_datetime : datetime | None
+        Latest observation datetime from group members (for tolteca_web filtering)
+
+    Notes
+    -----
+    Identification fields (obsnum, master) inherited from ObsIdMixin.
+    Out-of-focus holography is used for primary mirror surface measurements.
+    """
+
+    tag: Literal["oof_group"] = "oof_group"  # Discriminator for union types
+    n_items: int = 0
+    oof_positions: list[float] | None = None
+    surface_rms: float | None = None
+    oof_metric: str | None = None
+
+
+@dataclass
 class NamedGroupMeta(DataProdMetaBase):
     """Metadata specific to dp_named_group.
 
@@ -584,6 +616,7 @@ AnyDataProdMeta = (
     | DrivefitMeta
     | FocusGroupMeta
     | AstigGroupMeta
+    | OofGroupMeta
     | NamedGroupMeta
 )
 

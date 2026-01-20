@@ -544,6 +544,7 @@ def ingest_from_toltec_db(
         skipped = 0
         failed = 0
         missing = 0
+        ingestor = None  # Will be set for each file, used for timing stats
         
         with Progress() as progress:
             task = progress.add_task("[cyan]Ingesting files...", total=len(rows))
@@ -663,8 +664,8 @@ def ingest_from_toltec_db(
             console.print(f"  {key:20s}: {val:6.2f}s ({pct:5.1f}%)")
         console.print(f"  {'Total':20s}: {total:6.2f}s")
         
-        # Ingestor internal timings
-        if hasattr(ingestor, '_timings'):
+        # Ingestor internal timings (only if we actually processed rows)
+        if ingestor is not None and hasattr(ingestor, '_timings'):
             console.print(f"\n[bold]Performance breakdown (ingestor.ingest_file):[/bold]")
             ingestor_total = sum(ingestor._timings.values())
             for key, val in ingestor._timings.items():

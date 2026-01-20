@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from tolteca_db.models.metadata import AstigGroupMeta, CalGroupMeta, DrivefitMeta, FocusGroupMeta
+from tolteca_db.constants import DataProdType as DataProdTypeEnum
+from tolteca_db.models.metadata import AstigGroupMeta, CalGroupMeta, DrivefitMeta, FocusGroupMeta, OofGroupMeta
 from tolteca_db.models.orm import DataProd, DataProdAssoc, DataProdAssocType, DataProdType
 
-from .collators import AstigmatismGroupCollator, CalGroupCollator, DriveFitCollator, FocusGroupCollator
+from .collators import AstigmatismGroupCollator, CalGroupCollator, DriveFitCollator, FocusGroupCollator, OofGroupCollator
 from .pool import ObservationPool
 from .state import AssociationState, GroupInfo
 
@@ -59,6 +60,7 @@ class AssociationStats:
     drivefit_groups: int = 0
     focus_groups: int = 0
     astig_groups: int = 0
+    oof_groups: int = 0
 
 
 class AssociationGenerator:
@@ -95,6 +97,7 @@ class AssociationGenerator:
             DriveFitCollator(),
             FocusGroupCollator(),
             AstigmatismGroupCollator(),
+            OofGroupCollator(),
         ]
         
         # Pre-fetch type PKs for efficiency
@@ -367,6 +370,8 @@ class AssociationGenerator:
                 stats.focus_groups = group_stats["groups"] + group_stats.get("updated", 0)
             elif isinstance(collator, AstigmatismGroupCollator):
                 stats.astig_groups = group_stats["groups"] + group_stats.get("updated", 0)
+            elif isinstance(collator, OofGroupCollator):
+                stats.oof_groups = group_stats["groups"] + group_stats.get("updated", 0)
         
         # Flush state if incremental
         if incremental and self.state is not None:
@@ -471,13 +476,8 @@ class AssociationGenerator:
             existing_group = self.state.get_existing_group(candidate_key)
             
             if existing_group:
-                # Update existing group
-                new_member_pks = [info.data_prod_pk for info in assoc_infos]
-                self._update_existing_group(
-                    existing_group=existing_group,
-                    new_member_pks=new_member_pks,
-                )
                 groups_updated += 1
+                group_pk = existing_group.group_pk
             else:
                 # Create new group
                 group_dp = self._create_group_data_prod(
@@ -485,6 +485,7 @@ class AssociationGenerator:
                     meta=group_meta,
                 )
                 groups_created += 1
+                group_pk = group_dp.pk
                 
                 # Register in state
                 group_info = GroupInfo(
@@ -497,27 +498,36 @@ class AssociationGenerator:
                 self.state.register_group(group_info)
             
             # Create association entries for new members
+            new_assocs_for_this_group = 0
             for assoc_info in assoc_infos:
                 obs_pk = assoc_info.data_prod_pk
                 assoc_type_fk = self._assoc_type_pks[assoc_info.data_prod_assoc_type]
                 
                 # Only create association if not already grouped for THIS type
                 if not self.state.is_grouped(obs_pk, assoc_type_fk):
-                    group_pk = existing_group.group_pk if existing_group else group_dp.pk
                     self._create_association(
                         group_dp_pk=group_pk,
                         obs_dp_pk=obs_pk,
                         assoc_type_label=assoc_info.data_prod_assoc_type,
                     )
                     assocs_created += 1
+                    new_assocs_for_this_group += 1
                     
                     # Mark as grouped for THIS association type
                     self.state.mark_grouped(obs_pk, assoc_type_fk)
+            
+            # Update group metadata AFTER associations are created (only if group was updated)
+            if existing_group and new_assocs_for_this_group > 0:
+                self._update_existing_group(existing_group, new_assocs_for_this_group)
         
         return {"groups": groups_created, "updated": groups_updated, "assocs": assocs_created}
 
     def _build_candidate_key(self, collator, meta: dict) -> str:
         """Build candidate key for group identification.
+        
+        Uses obsnum and master (where applicable) to create a stable identifier.
+        The key must NOT include n_items or other values that change as the group grows,
+        because we need to match new group candidates against existing groups.
         
         Parameters
         ----------
@@ -531,41 +541,106 @@ class AssociationGenerator:
         str
             Unique candidate key
         """
-        # Build key from group type and identifying metadata
+        # Build key from group type and stable identifying metadata
+        # NOTE: Do NOT use n_items or name (which includes n_items) - these change as groups grow
         parts = [collator.data_prod_type]
         
-        # Add identifying fields based on group type
-        # Handle both dict and dataclass metadata
-        if isinstance(collator, CalGroupCollator):
-            obsnum = meta.get("obsnum", "") if isinstance(meta, dict) else getattr(meta, "obsnum", "")
+        # Extract obsnum - this is the first member's obsnum and uniquely identifies the group
+        obsnum = meta.get("obsnum", "") if isinstance(meta, dict) else getattr(meta, "obsnum", "")
+        parts.append(str(obsnum))
+        
+        # Add master for collators that need it
+        if isinstance(collator, (CalGroupCollator, DriveFitCollator)):
             master = meta.get("master", "") if isinstance(meta, dict) else getattr(meta, "master", "")
-            parts.append(str(obsnum))
             parts.append(str(master))
-        elif isinstance(collator, DriveFitCollator):
-            obsnum = meta.get("obsnum", "") if isinstance(meta, dict) else getattr(meta, "obsnum", "")
-            master = meta.get("master", "") if isinstance(meta, dict) else getattr(meta, "master", "")
-            parts.append(str(obsnum))
-            parts.append(str(master))
-        elif isinstance(collator, FocusGroupCollator):
-            obsnum = meta.get("obsnum", "") if isinstance(meta, dict) else getattr(meta, "obsnum", "")
-            parts.append(str(obsnum))
         
         return "_".join(parts)
 
     def _update_existing_group(
         self,
         existing_group: GroupInfo,
-        new_member_pks: list[int],
+        new_assoc_count: int,
     ) -> None:
-        """Add new members to an existing group.
+        """Update metadata for an existing group after new associations were added.
+        
+        This method should be called AFTER associations have been created,
+        so it can query the actual association count from the database.
         
         Parameters
         ----------
         existing_group : GroupInfo
             Information about the existing group
-        new_member_pks : list[int]
-            Primary keys of new members to add
+        new_assoc_count : int
+            Number of new associations that were actually created
         """
+        # Use COUNT(*) instead of loading all associations - O(1) vs O(N)
+        actual_assoc_count = self.session.scalar(
+            select(func.count()).select_from(DataProdAssoc).where(
+                DataProdAssoc.src_data_prod_fk == existing_group.group_pk
+            )
+        ) or 0
+        
+        # Update the DataProd.meta in the database
+        group_dp = self.session.get(DataProd, existing_group.group_pk)
+        if group_dp and group_dp.meta:
+            meta = group_dp.meta
+            # Update n_items with actual count
+            if hasattr(meta, "n_items"):
+                meta.n_items = actual_assoc_count
+            # Update name with new n_items
+            if hasattr(meta, "name"):
+                meta.name = self._rebuild_group_name(meta, actual_assoc_count)
+            # Mark the meta as modified (SQLAlchemy tracks JSON changes)
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(group_dp, "meta")
+            self.session.flush()
+        
         # Update member count in state
-        new_count = existing_group.n_members + len(new_member_pks)
-        self.state.update_group_member_count(existing_group.candidate_key, new_count)
+        self.state.update_group_member_count(existing_group.candidate_key, actual_assoc_count)
+
+    def _rebuild_group_name(self, meta, n_items: int) -> str:
+        """Rebuild the group name with updated n_items.
+        
+        Parameters
+        ----------
+        meta : dataclass
+            Group metadata containing obsnum, master, etc.
+        n_items : int
+            New member count
+            
+        Returns
+        -------
+        str
+            Updated group name
+        """
+        master = getattr(meta, "master", "toltec")
+        obsnum = getattr(meta, "obsnum", 0)
+        data_prod_type = getattr(meta, "data_prod_type", "")
+        
+        # Determine suffix based on group type (compare with both enum and string)
+        if data_prod_type == DataProdTypeEnum.DP_CAL_GROUP or data_prod_type == "dp_cal_group":
+            return f"{master}-{obsnum}-g{n_items}-cal"
+        elif data_prod_type == DataProdTypeEnum.DP_DRIVEFIT or data_prod_type == "dp_drivefit":
+            return f"{master}-{obsnum}-g{n_items}-drivefit"
+        elif data_prod_type == DataProdTypeEnum.DP_FOCUS_GROUP or data_prod_type == "dp_focus_group":
+            obsnum_end = getattr(meta, "obsnum_end", None)
+            if obsnum_end and obsnum_end != obsnum:
+                return f"{master}-{obsnum}to{obsnum_end}-g{n_items}-focus"
+            return f"{master}-{obsnum}-g{n_items}-focus"
+        elif data_prod_type == DataProdTypeEnum.DP_ASTIG_GROUP or data_prod_type == "dp_astig_group":
+            obsnum_end = getattr(meta, "obsnum_end", None)
+            if obsnum_end and obsnum_end != obsnum:
+                return f"{master}-{obsnum}to{obsnum_end}-g{n_items}-astig"
+            return f"{master}-{obsnum}-g{n_items}-astig"
+        elif data_prod_type == DataProdTypeEnum.DP_OOF_GROUP or data_prod_type == "dp_oof_group":
+            obsnum_end = getattr(meta, "obsnum_end", None)
+            if obsnum_end and obsnum_end != obsnum:
+                return f"{master}-{obsnum}to{obsnum_end}-g{n_items}-oof"
+            return f"{master}-{obsnum}-g{n_items}-oof"
+        else:
+            # Fallback: try to parse and rebuild existing name
+            old_name = getattr(meta, "name", "")
+            import re
+            # Replace g\d+ with g{n_items}
+            return re.sub(r"-g\d+-", f"-g{n_items}-", old_name) if old_name else f"group-g{n_items}"
+

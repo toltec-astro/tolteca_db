@@ -4,6 +4,8 @@ This module provides collators for:
 - CalGroup: Calibration sequences (VNA sweep followed by target sweeps)
 - DriveFit: Drive characterization sequences (target sweeps with same obsnum)
 - FocusGroup: Focus measurement sequences (observations with obs_goal='focus')
+- AstigmatismGroup: Astigmatism sequences (observations with obs_goal='astig')
+- OofGroup: Out-of-focus holography sequences (observations with obs_goal='oof')
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from tolteca_db.models.metadata import (
     DrivefitMeta,
     FocusGroupMeta,
     AstigGroupMeta,
+    OofGroupMeta,
 )
 
 from .base import AssociationInfo, CollatorBase, Group, GroupFlag, Position
@@ -25,6 +28,7 @@ __all__ = [
     "DriveFitCollator",
     "FocusGroupCollator",
     "AstigmatismGroupCollator",
+    "OofGroupCollator",
 ]
 
 
@@ -608,6 +612,64 @@ class AstigmatismGroupCollator(CollateByConsecutiveObsnum):
         return AstigGroupMeta(
             name=name,
             data_prod_type=DataProdType.DP_ASTIG_GROUP,
+            master=master,
+            obsnum=obsnum_start,
+            n_items=n_items,
+            obs_datetime=latest_obs_datetime,
+        )
+
+
+class OofGroupCollator(CollateByConsecutiveObsnum):
+    """Collator for out-of-focus holography sequences.
+
+    Identifies groups of consecutive observations with obs_goal='oof'.
+    These are used for primary mirror surface measurements using
+    out-of-focus holography techniques.
+
+    Groups are formed from consecutive obsnums (e.g., 145653, 145654, 145655).
+    A gap in obsnum sequence starts a new group.
+    """
+
+    data_prod_type: ClassVar[str] = DataProdType.DP_OOF_GROUP.value
+    data_prod_assoc_type: ClassVar[str] = (
+        DataProdAssocType.DPA_OOF_GROUP_RAW_OBS.value
+    )
+    obs_goal_filter: ClassVar[tuple[str, ...]] = ("oof",)
+
+    def _make_meta(self, group: Group) -> OofGroupMeta:
+        """Create metadata for OOF group."""
+        if not group.items or not group.items[0].meta:
+            master = "toltec"
+            obsnum_start = 0
+            obsnum_end = 0
+        else:
+            first = group.items[0].meta
+            last = group.items[-1].meta
+            master = first.master or "toltec"
+            obsnum_start = first.obsnum or 0
+            obsnum_end = last.obsnum or obsnum_start
+
+        # Extract latest observation datetime from members
+        member_datetimes = [
+            item.meta.obs_datetime
+            for item in group.items
+            if item.meta
+            and hasattr(item.meta, "obs_datetime")
+            and item.meta.obs_datetime is not None
+        ]
+        latest_obs_datetime = max(member_datetimes) if member_datetimes else None
+
+        n_items = len(group.items)
+
+        # Name includes obsnum range for consecutive groups
+        if obsnum_start == obsnum_end:
+            name = f"{master}-{obsnum_start}-g{n_items}-oof"
+        else:
+            name = f"{master}-{obsnum_start}to{obsnum_end}-g{n_items}-oof"
+
+        return OofGroupMeta(
+            name=name,
+            data_prod_type=DataProdType.DP_OOF_GROUP,
             master=master,
             obsnum=obsnum_start,
             n_items=n_items,

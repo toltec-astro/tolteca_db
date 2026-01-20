@@ -94,24 +94,41 @@ class DatabaseBackend(StateBackend):
         return dict(grouped_by_type)
 
     def load_group_index(self) -> dict[str, GroupInfo]:
-        """Build index from existing group DataProds."""
+        """Build index from existing group DataProds.
+        
+        Uses a single aggregation query for member counts to avoid O(G) round-trips.
+        """
         index = {}
 
         # Query all group type DataProds (types > 1 are groups)
         groups = self.session.scalars(
             select(DataProd).where(DataProd.data_prod_type_fk > 1)
         ).all()
+        
+        if not groups:
+            return index
+        
+        # Single query to get all member counts - O(1) round-trip instead of O(G)
+        group_pks = [g.pk for g in groups]
+        count_stmt = (
+            select(
+                DataProdAssoc.src_data_prod_fk,
+                func.count().label("n_members")
+            )
+            .where(DataProdAssoc.src_data_prod_fk.in_(group_pks))
+            .group_by(DataProdAssoc.src_data_prod_fk)
+        )
+        member_counts = {
+            row.src_data_prod_fk: row.n_members
+            for row in self.session.execute(count_stmt).all()
+        }
 
         for group in groups:
             # Extract candidate key from metadata
             candidate_key = self._extract_candidate_key(group)
             if candidate_key:
-                # Get member count
-                n_members = self.session.scalar(
-                    select(func.count())
-                    .select_from(DataProdAssoc)
-                    .where(DataProdAssoc.src_data_prod_fk == group.pk)
-                )
+                # Get member count from pre-fetched map
+                n_members = member_counts.get(group.pk, 0)
 
                 # Get group type label
                 group_type = self._get_group_type_label(group.data_prod_type_fk)
@@ -122,7 +139,7 @@ class DatabaseBackend(StateBackend):
                     group_type=group_type,
                     candidate_key=candidate_key,
                     n_members=n_members,
-                    metadata=self._serialize_metadata(group.metadata),
+                    metadata=self._serialize_metadata(group.meta),
                 )
                 index[candidate_key] = info
 
@@ -132,35 +149,46 @@ class DatabaseBackend(StateBackend):
         """
         Extract candidate key from group metadata.
 
-        Different group types use different keys:
-        - CalGroup: f"cal_{obsnum}_{master}"
-        - DriveFit: f"drivefit_{obsnum}_{master}"
-        - FocusGroup: f"focus_{obsnum}_{master}"
+        Uses obsnum and master (where applicable) to create a stable identifier.
+        The key must NOT include n_items or name (which contains n_items) because
+        these values change as groups grow, and we need to match existing groups.
+        
+        Keys:
+        - CalGroup: f"dp_cal_group_{obsnum}_{master}"
+        - DriveFit: f"dp_drivefit_{obsnum}_{master}"
+        - FocusGroup: f"dp_focus_group_{obsnum}"
+        - AstigGroup: f"dp_astig_group_{obsnum}"
+        - OofGroup: f"dp_oof_group_{obsnum}"
         """
-        if group.metadata is None:
+        if group.meta is None:
             return None
 
-        # Extract fields from metadata
-        obsnum = getattr(group.metadata, "obsnum", None)
-        master = getattr(group.metadata, "master", None)
-
-        if obsnum is None or master is None:
+        # Extract obsnum - this is the first member's obsnum
+        obsnum = getattr(group.meta, "obsnum", None)
+        if obsnum is None:
             return None
 
-        # Determine group type from data_prod_type_fk
         group_type = self._get_group_type_label(group.data_prod_type_fk)
 
-        return f"{group_type}_{obsnum}_{master}"
+        # Cal and Drivefit groups require master field
+        if group_type in ("dp_cal_group", "dp_drivefit"):
+            master = getattr(group.meta, "master", None)
+            if master is None:
+                return None
+            return f"{group_type}_{obsnum}_{master}"
+
+        # Focus, Astig, and Oof groups only use obsnum
+        return f"{group_type}_{obsnum}"
 
     def _get_group_type_label(self, data_prod_type_fk: int) -> str:
         """Map data_prod_type_fk to group type label."""
-        # This mapping should match your DataProdType enum
-        # TODO: Query from database or use enum
         type_map = {
-            1: "raw_obs",
-            2: "cal_group",
-            3: "drivefit",
-            4: "focus",
+            1: "dp_raw_obs",
+            3: "dp_cal_group",
+            4: "dp_drivefit",
+            5: "dp_focus_group",
+            6: "dp_astig_group",
+            7: "dp_oof_group",
         }
         return type_map.get(data_prod_type_fk, f"type_{data_prod_type_fk}")
 
