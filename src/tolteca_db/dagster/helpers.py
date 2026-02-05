@@ -581,13 +581,15 @@ def add_tel_csv_metadata(
         if not location_orm:
             return {"added": False, "source_uri": None, "status": "location_not_found"}
 
-        # Check if DataProd already has tel source
+        # Check if DataProd already has tel source WITH a valid source_uri
         # (tel sources have role="METADATA" and location matching tel location)
+        # Ignore sources with NULL source_uri (incomplete entries from previous runs)
         stmt = (
             select(DataProdSource)
             .where(DataProdSource.data_prod_fk == data_prod_pk)
             .where(DataProdSource.role == "METADATA")
             .where(DataProdSource.location_fk == location_orm.pk)
+            .where(DataProdSource.source_uri.isnot(None))
         )
         existing = session.scalar(stmt)
 
@@ -630,6 +632,6 @@ def add_tel_csv_metadata(
             # No matching row found in CSV
             return {
                 "added": False,
-                "source_uri": source_uri,
+                "source_uri": None,
                 "status": "csv_row_not_found",
             }
