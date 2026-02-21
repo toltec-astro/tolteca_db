@@ -27,6 +27,27 @@ from .assets import process_quartet
 __all__ = ["quartet_sensor"]
 
 
+def _roach_index_to_interface(roach_index: int) -> str:
+    """Convert RoachIndex to interface name.
+    
+    RoachIndex 0-12 are toltec interfaces (toltec0, toltec1, ..., toltec12).
+    RoachIndex 13 is the HWPR (half-wave plate rotator) interface.
+    
+    Parameters
+    ----------
+    roach_index : int
+        RoachIndex value from toltec_db
+        
+    Returns
+    -------
+    str
+        Interface name (e.g., "toltec0", "hwpr")
+    """
+    if roach_index == 13:
+        return "hwpr"
+    return f"toltec{roach_index}"
+
+
 class QuartetValidationTracker:
     """Track validation state and timeout for quartet completion detection.
 
@@ -324,7 +345,7 @@ def quartet_sensor(context: SensorEvaluationContext):
                 "timestamp": obs.get("timestamp", datetime.now(timezone.utc)),
             }
 
-        interface = f"toltec{roach_index}"
+        interface = _roach_index_to_interface(roach_index)
         quartets[quartet_key]["interfaces"][interface] = {
             "roach_index": roach_index,
             "valid": valid,

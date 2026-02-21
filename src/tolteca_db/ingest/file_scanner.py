@@ -27,7 +27,7 @@ class ParsedFileInfo:
     filepath : Path
         Full path to the file
     interface : str
-        Interface ID (toltec, hwp, tel_toltec, etc.)
+        Interface ID (toltec, hwpr, tel_toltec, etc.)
     roach : int | None
         Roach number (0-12 for detector data)
     obsnum : int
@@ -63,11 +63,12 @@ class ParsedFileInfo:
 # Examples:
 #   toltec0_123456_001_0000_timestream.nc
 #   toltec0_113533_000_0001_2024_03_19_05_27_52_targsweep.nc
-#   hwp_123456_001_0000.nc
+#   hwpr_123456_001_0000.nc
+#   hwpr_018863_000_0000_2026_02_05_00_26_05_timestream.nc
 #   tel_toltec_123456_001_0000.nc
 
 TOLTEC_FILENAME_PATTERN = re.compile(
-    r"(?P<interface>toltec\d+|hwp|tel_toltec|toltec)"
+    r"(?P<interface>toltec\d+|hwpr|tel_toltec|toltec)"
     r"_(?P<obsnum>\d+)"
     r"_(?P<subobsnum>\d+)"
     r"_(?P<scannum>\d+)"
@@ -118,9 +119,9 @@ def guess_info_from_file(filepath: str | Path) -> ParsedFileInfo | None:
     >>> info.roach
     0
     
-    >>> info = guess_info_from_file("hwp_123456_001_0000.nc")
+    >>> info = guess_info_from_file("hwpr_123456_001_0000.nc")
     >>> info.interface
-    'hwp'
+    'hwpr'
     >>> info.roach
     None
     
@@ -239,8 +240,10 @@ def _infer_data_kind(file_suffix: str | None, interface: str | None, file_ext: s
     
     # Handle case where no suffix: roach .nc files default to RawTimeStream
     # Following tolteca pattern: (r"toltec(\d+)", None, ".nc"): _T.RawTimeStream
-    if interface and interface.startswith("toltec") and file_ext == "nc":
-        return ToltecDataKind.RawTimeStream
+    # Also applies to hwpr interface files
+    if interface and file_ext == "nc":
+        if interface.startswith("toltec") or interface == "hwpr":
+            return ToltecDataKind.RawTimeStream
     
     return None
 

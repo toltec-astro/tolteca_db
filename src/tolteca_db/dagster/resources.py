@@ -368,7 +368,7 @@ class ValidationConfig(ConfigurableResource):
     Attributes
     ----------
     max_interface_count : int
-        Maximum possible interfaces (default: 13 for TolTEC)
+        Maximum possible interfaces (default: 14 for TolTEC - 0-12 toltec + 13 hwpr)
     disabled_interfaces : list[int]
         List of RoachIndex values for known-disabled interfaces (default: [])
     validation_timeout_seconds : float
@@ -382,7 +382,7 @@ class ValidationConfig(ConfigurableResource):
     Examples
     --------
     >>> validation = ValidationConfig(
-    ...     max_interface_count=13,
+    ...     max_interface_count=14,
     ...     disabled_interfaces=[3, 7],  # toltec3 and toltec7 known broken
     ...     validation_timeout_seconds=30.0,
     ...     sensor_poll_interval_seconds=5,
@@ -415,7 +415,7 @@ class ValidationConfig(ConfigurableResource):
     - Typical value: 30s (2-3× sensor poll interval for safety margin)
     """
 
-    max_interface_count: int = 13
+    max_interface_count: int = 14  # 0-12: toltec interfaces, 13: hwpr
     disabled_interfaces: list[int] = []
     # Time since LAST Valid=1 transition (resets on each new valid) before marking complete
     validation_timeout_seconds: float = 30.0
@@ -428,13 +428,14 @@ class ValidationConfig(ConfigurableResource):
         Returns
         -------
         set[int]
-            Set of RoachIndex values (0-12) that should be present and valid
+            Set of RoachIndex values (0-13) that should be present and valid
+            0-12: toltec interfaces, 13: hwpr
 
         Examples
         --------
         >>> config = ValidationConfig(disabled_interfaces=[3, 7])
         >>> config.get_expected_interfaces()
-        {0, 1, 2, 4, 5, 6, 8, 9, 10, 11, 12}  # Excludes 3 and 7
+        {0, 1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13}  # Excludes 3 and 7
         """
         all_interfaces = set(range(self.max_interface_count))
         return all_interfaces - set(self.disabled_interfaces)
@@ -445,7 +446,7 @@ class ValidationConfig(ConfigurableResource):
         Parameters
         ----------
         roach_index : int
-            RoachIndex value (0-12)
+            RoachIndex value (0-13: 0-12 toltec, 13 hwpr)
 
         Returns
         -------

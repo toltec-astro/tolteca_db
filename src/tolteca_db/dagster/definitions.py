@@ -123,7 +123,7 @@ def _get_common_resources() -> dict:
             data_root=EnvVar("TOLTECA_WEB_DATA_LMT_ROOTPATH"),
         ),
         "validation": ValidationConfig(
-            max_interface_count=13,
+            max_interface_count=14,  # 0-12: toltec, 13: hwpr
             disabled_interfaces=_get_disabled_interfaces(),
             validation_timeout_seconds=_get_validation_timeout(default=15.0),
         ),
