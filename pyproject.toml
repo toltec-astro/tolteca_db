@@ -21,6 +21,26 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: Implementation :: CPython",
 ]
+dependencies = [
+  "typer>=0.20.0",
+  "sqlalchemy>=2.0.44",
+  "blake3>=1.0.8",
+  "alembic>=1.14.0",
+  "pydantic>=2.12.0",
+  "adaptix>=3.0.0b11",
+  "duckdb>=1.0.0",
+  "duckdb-engine>=0.13.0",
+  "pyarrow>=18.0.0",
+  "pandas>=2.0.0",
+  "loguru>=0.7.0",
+  "dagster>=1.5.0",
+  "dagster-webserver>=1.5.0",
+  "tenacity>=8.0.0",
+  "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dash = ["dash>=2.14.0", "dash-mantine-components>=0.14.0", "plotly>=5.18.0"]
 
 [dependency-groups]
 test = [
@@ -101,7 +121,15 @@ addopts = [
 ]
 log_cli_level = "INFO"
 xfail_strict = "true"
-filterwarnings = ["error"]
+filterwarnings = [
+  "error",
+  "ignore::sqlalchemy.exc.SADeprecationWarning",
+  "ignore::pydantic.warnings.PydanticDeprecatedSince20",
+  "ignore::dagster_shared.utils.warnings.BetaWarning",
+]
+markers = [
+  "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+]
 
 [tool.ty]
 # All rules are enabled as "error" by default; no need to specify unless overriding.
@@ -143,6 +171,7 @@ lint.ignore = [
   "S101",   # use of assert; needed for narrowing types
   "COM812", # trailing comma (conflicts with ruff formatter)
   "ISC001", # implicit string concatenation (conflicts with ruff formatter)
+  "PD011",  # false positives for xarray .values usage
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -173,7 +202,10 @@ runtime-evaluated-base-classes = [
   "pydantic.BaseModel",
   "sqlalchemy.orm.DeclarativeBase",
 ]
-runtime-evaluated-decorators = ["pydantic.validate_call"]
+runtime-evaluated-decorators = [
+  "pydantic.validate_call",
+  "attrs.define",
+]
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
@@ -228,3 +260,6 @@ cache-keys = [
 
 [tool.cruft]
 skip = [".git"]
+
+[tool.dagster]
+module_name = "tolteca_db.dagster.definitions"

@@ -1,1 +1,1 @@
-"""Tests for tolteca_db."""
+"""Unit test package for tolteca_db."""
