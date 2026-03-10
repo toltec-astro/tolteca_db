@@ -17,32 +17,35 @@
 
 ---
 
-## Phase 1: obsspec.py + constants.py ⬜ NOT STARTED
+## Phase 1: obsspec.py + constants.py ✅ COMPLETE
 
 **Goal:** Single authoritative ObsSpec parser; no more scattered parsing across modules.
 
-- [ ] `src/tolteca_db/constants.py`
-  - [ ] `MASTERS` — set of valid master names
-  - [ ] `INTERFACE_NAMES` — canonical interface string set
-  - [ ] `FILE_SUFFIXES_BY_INTERFACE` — dict: interface → set of suffixes
-  - [ ] `OBSNUM_RANGE` — valid obsnum min/max
-  - [ ] Export `__all__`
+- [x] `src/tolteca_db/constants.py`
+  - [x] `MasterType(StrEnum)` — tcs, ics, clip
+  - [x] `type MasterNameT = Literal[...]`
+  - [x] `ToltecInfo` — ClassVar lookup tables: masters, roach_interface, interface_master, interface_array_name, obsnum_min/max
+  - [x] `DataKind(Flag)` — replaces ToltecDataKind; backward-compat alias kept
+  - [x] All enums migrated to `StrEnum` with `auto()` (lowercase values)
 
-- [ ] `src/tolteca_db/obsspec.py`
-  - [ ] `ObsSpec` frozen dataclass: `master`, `obsnum`, `subobsnum`, `scannum`
-  - [ ] `ObsSpec.parse(s: str) -> ObsSpec` — parse `{master}-{obsnum}-{subobsnum}-{scannum}`
-  - [ ] `ObsSpec.uid` property → human-readable PK string
-  - [ ] `ObsSpec.__str__` / `__repr__`
-  - [ ] `ObsSpec.from_path(path: Path) -> ObsSpec | None` — extract from file path
-  - [ ] `ObsSpec.matches_pattern(pattern: str) -> bool` — glob/range pattern matching
-  - [ ] Validate master against `constants.MASTERS`
-  - [ ] `ObsSpecError` exception class
+- [x] `src/tolteca_db/obsspec.py`
+  - [x] `ObsSpec` frozen dataclass: `master`, `obsnum`, `subobsnum`, `scannum`
+  - [x] `ObsSpec.uid` property → `{master}-{obsnum}-{subobsnum}-{scannum}`
+  - [x] `ObsSpec.parse(s: str) -> ObsSpec` — parse canonical UID string
+  - [x] `ObsSpec.from_path(path, master=None) -> ObsSpec | None` — extract from filename
+  - [x] `__post_init__` validates master + obsnum range
+  - [x] `ObsSpecError(ValueError)` exception class
+  - [x] `__str__` returns uid; `__repr__` shows all fields
 
-- [ ] `tests/test_obsspec.py`
-  - [ ] Parse round-trip tests
-  - [ ] `from_path()` with real-world TolTEC path examples
-  - [ ] Invalid master → `ObsSpecError`
-  - [ ] Pattern matching tests
+- [x] `tests/test_obsspec.py` — **66 tests, all passing**
+  - [x] `TestMasterType`, `TestToltecInfo`, `TestDataProdType`, `TestDataKind`, `TestStrEnums`
+  - [x] `TestObsSpecCreate`, `TestObsSpecUid`, `TestObsSpecParse`
+  - [x] `TestObsSpecFromPath` (all prefix patterns, master override, basename-only, zero-padding)
+  - [x] `TestObsSpecIntegration` (round-trips, set dedup, sort)
+
+**Notes:**
+- Used `[m.value for m in MasterType]` instead of `get_args(MasterNameT)` because PEP 695 `type X = Literal[...]` creates `TypeAliasType`; `get_args()` returns `()` for it.
+- Commit: `616bcbc`
 
 ---
 
