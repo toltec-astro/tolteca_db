@@ -1,233 +1,126 @@
-"""Data product models: DataProd, DataKind, DataProdDataKind.
+"""Storage ORM models: StorageRootRecord, FileRecord.
 
-Phase 3: Structured metadata with AdaptixJSON for type-safe JSON storage.
-Union types supported via Literal discriminator fields.
+StorageRootRecord — registry of data roots (filesystems, S3, etc.).
+FileRecord — physical file tracking for health monitoring and checksumming.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from tolteca_db.constants import ReducedStatus
-from tolteca_db.models.metadata import AnyDataProdMeta, adaptix_json_type
 from tolteca_db.models.orm.base import Base
-from tolteca_db.utils import Created_at, Desc, LabelKey, Pk, Updated_at, fk
+from tolteca_db.utils import Context, Created_at, LabelKey, Pk, Updated_at
 
 if TYPE_CHECKING:
-    from tolteca_db.models.orm.flag import DataProdFlag
-    from tolteca_db.models.orm.source import DataProdSource
+    from tolteca_db.models.orm.registry import DataProdRecord
 
 
-class DataKind(Base):
-    """
-    Registry of data kind classifications.
-    
-    Minimal design following tolteca_web pattern (ics/tcs tables).
-    
+class StorageRootRecord(Base):
+    """Registry of data roots — filesystems, S3 buckets, remote servers.
+
+    One row per distinct data root. The ``root_path`` is an absolute path
+    or URI prefix (e.g. ``/data/toltec``, ``s3://toltec-archive``).
+
     Attributes
     ----------
     pk : int
-        Integer primary key
+        Integer primary key.
     label : str
-        Kind name matching Python enum (Raw, TimeOrderedData, Image)
-    category : str
-        Classification (shape, calibration, measurement, ancillary)
-    description : str | None
-        Human-readable description
-    assigned_kinds : list[DataProdDataKind]
-        Products with this kind assigned (relationship)
-    """
-
-    __tablename__ = "data_kind"
-
-    pk: Mapped[Pk]
-
-    label: Mapped[LabelKey]
-
-    category: Mapped[str] = mapped_column(String(32), index=True)
-
-    description: Mapped[Desc | None]
-
-    # Relationships
-    data_prod: Mapped[list[DataProdDataKind]] = relationship(
-        back_populates="kind",
-        cascade="all, delete-orphan",
-    )
-
-
-class DataProdType(Base):
-    """
-    Registry of data product types.
-    
-    Minimal design following tolteca_web pattern (ics/tcs tables).
-    Static metadata tied to each product type.
-    
-    Attributes
-    ----------
-    pk : int
-        Integer primary key
-    label : str
-        Type label (dp_raw_obs, dp_reduced_obs, dp_cal_group, etc.)
-    description : str | None
-        Human-readable description
-    level : int | None
-        Processing level for this type (0=raw, 1+=reduced)
-    data_prod : list[DataProd]
-        Products of this type (relationship)
-    """
-
-    __tablename__ = "data_prod_type"
-
-    pk: Mapped[Pk]
-
-    label: Mapped[LabelKey]
-
-    description: Mapped[Desc | None]
-
-    # Static type metadata
-    level: Mapped[int | None] = mapped_column()
-
-    # Relationships
-    data_prod: Mapped[list[DataProd]] = relationship(
-        back_populates="data_prod_type",
-        cascade="all, delete-orphan",
-    )
-
-
-class DataProd(Base):
-    """
-    Unified data product table (RAW and REDUCED).
-    
-    Note: Renamed from DataProduct to DataProd to align with reference
-    implementations (tolteca_v1, tolteca_v2).
-    
-    Minimal columns - static metadata (level) moved to data_prod_type table.
-    Dynamic instance data (name, etc.) stored in meta JSON.
-    Classification via DataKind relationship (not columns).
-    
-    Attributes
-    ----------
-    pk : str
-        Stable content-addressable ID (blake3 hash of canonical identity)
-    data_prod_type_fk : int
-        Foreign key to data_prod_type
-    data_prod_type : DataProdType
-        Product type relationship (access .label, .level)
-    lifecycle_status : str
-        Lifecycle state (ACTIVE, SUPERSEDED for REDUCED products)
-    availability_state : str | None
-        Physical availability (AVAILABLE, MISSING, REMOTE, STAGED for RAW)
-    content_hash : str | None
-        Hash of file contents (blake3: or sha256: prefixed)
-    meta : dict
-        Flexible metadata (JSON) - includes name and other dynamic attributes
+        Unique human-readable label (e.g. ``site_data``, ``server_archive``).
+    host : str | None
+        Hostname for remote roots; ``None`` for local roots.
+    root_path : str
+        Absolute path or URI prefix for this storage root.
+    is_local : bool
+        ``True`` if the root is directly accessible on the local filesystem.
+    meta : dict | None
+        Additional JSON metadata.
     created_at : datetime
-        Creation timestamp (UTC, timezone-aware)
-    updated_at : datetime
-        Last update timestamp (UTC, timezone-aware)
-    sources : list[DataProdSource]
-        Source locations for this product (interface files, URLs, etc.)
-    flag : list[DataProdFlag]
-        Quality flags assigned to this product (relationship)
-    kind : list[DataProdDataKind]
-        Data kind classifications for this product (relationship)
+        Database insert timestamp.
+    file_records : list[FileRecord]
+        Physical files under this storage root.
     """
 
-    __tablename__ = "data_prod"
+    __tablename__ = "storage_root"
 
-    # Primary key
     pk: Mapped[Pk]
+    label: Mapped[LabelKey]
+    host: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    root_path: Mapped[str] = mapped_column(String(512))
+    is_local: Mapped[bool] = mapped_column(Boolean, default=True)
+    meta: Mapped[Context]
+    created_at: Mapped[Created_at]
 
-    # Foreign key to data_prod_type
-    data_prod_type_fk: Mapped[int] = fk("data_prod_type", index=True)
-
-    # Lifecycle and availability state
-    lifecycle_status: Mapped[str] = mapped_column(
-        String(16),
-        index=True,
-        default=ReducedStatus.ACTIVE.value,
-    )
-    availability_state: Mapped[str | None] = mapped_column(String(16), index=True)
-
-    # Content addressing
-    content_hash: Mapped[str | None] = mapped_column(String(128), index=True)
-
-    # Structured metadata (Phase 3 - AdaptixJSON with union types!)
-    # AdaptixJSON DOES support union types using Literal discriminator fields!
-    # Each metadata dataclass has a 'tag' field with a unique Literal value.
-    # Automatic serialization/deserialization with type safety.
-    # Example: product.meta = RawObsMeta(tag="raw_obs", obsnum=123, ...)
-    # Retrieved as proper type: assert isinstance(product.meta, RawObsMeta)
-    meta: Mapped[AnyDataProdMeta] = mapped_column(
-        adaptix_json_type(AnyDataProdMeta),
-        nullable=False,
+    # Relationships
+    file_records: Mapped[list[FileRecord]] = relationship(
+        back_populates="storage_root",
+        cascade="all, delete-orphan",
     )
 
-    # Timestamps with timezone awareness and database-generated defaults
+    def __repr__(self) -> str:
+        return f"StorageRootRecord(label={self.label!r}, root_path={self.root_path!r})"
+
+
+class FileRecord(Base):
+    """Physical file tracking — one row per file, for health monitoring.
+
+    Tracks mtime, size, and checksum of each physical file associated with a
+    DataProdRecord.  Used by the file scanner to detect changes and verify integrity.
+
+    Attributes
+    ----------
+    pk : int
+        Integer primary key.
+    data_prod_fk : int
+        Foreign key to DataProdRecord.
+    storage_root_fk : int | None
+        Foreign key to StorageRootRecord; ``None`` if root is unknown.
+    rel_path : str
+        Path relative to the storage root (or absolute if root is ``None``).
+    mtime : float | None
+        POSIX modification timestamp of the file.
+    file_size : int | None
+        File size in bytes.
+    checksum : str | None
+        Content checksum, prefixed with algorithm (e.g. ``blake3:abcd...``).
+    created_at : datetime
+        Database insert timestamp.
+    updated_at : datetime
+        Last update timestamp.
+    data_prod : DataProdRecord
+        Parent data product.
+    storage_root : StorageRootRecord | None
+        Parent storage root.
+    """
+
+    __tablename__ = "file_record"
+
+    pk: Mapped[Pk]
+    data_prod_fk: Mapped[int] = mapped_column(
+        Integer, ForeignKey("data_prod.pk"), index=True
+    )
+    storage_root_fk: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("storage_root.pk"), nullable=True, index=True
+    )
+    rel_path: Mapped[str] = mapped_column(String(512))
+    mtime: Mapped[float | None] = mapped_column(nullable=True)
+    file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    checksum: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[Created_at]
     updated_at: Mapped[Updated_at]
 
-    # Relationships - use singular target table name
-    data_prod_type: Mapped[DataProdType] = relationship(
-        back_populates="data_prod",
-    )
-
-    sources: Mapped[list[DataProdSource]] = relationship(
-        back_populates="data_prod",
-        cascade="all, delete-orphan",
-    )
-
-    flag: Mapped[list[DataProdFlag]] = relationship(
-        back_populates="data_prod",
-        cascade="all, delete-orphan",
-    )
-
-    kind: Mapped[list[DataProdDataKind]] = relationship(
-        back_populates="data_prod",
-        cascade="all, delete-orphan",
-    )
-
-
-class DataProdDataKind(Base):
-    """
-    Assigned data kinds to products.
-    
-    Composite primary key (data_prod_fk, data_kind_fk).
-    
-    Attributes
-    ----------
-    data_prod_fk : str
-        Foreign key to data_prod
-    data_kind_fk : int
-        Foreign key to data_kind
-    applied_at : datetime
-        When kind was applied
-    source : str
-        How kind was determined (automatic/manual/inferred)
-    confidence : float | None
-        Confidence score for automatic assignment
-    """
-
-    __tablename__ = "data_prod_data_kind"
-
-    data_prod_fk: Mapped[int] = fk("data_prod", primary_key=True)
-
-    data_kind_fk: Mapped[int] = fk("data_kind", primary_key=True)
-
-    applied_at: Mapped[Created_at]
-
-    source: Mapped[str] = mapped_column(
-        String(16),
-        default="automatic",
-        index=True,
-    )
-
-    confidence: Mapped[float | None] = mapped_column()
-
     # Relationships
-    data_prod: Mapped[DataProd] = relationship(back_populates="kind")
-    kind: Mapped[DataKind] = relationship(back_populates="data_prod")
+    data_prod: Mapped[DataProdRecord] = relationship(back_populates="file_records")
+    storage_root: Mapped[StorageRootRecord | None] = relationship(
+        back_populates="file_records"
+    )
+
+    __table_args__ = (
+        Index("ix_file_record_data_prod_root", "data_prod_fk", "storage_root_fk"),
+    )
+
+    def __repr__(self) -> str:
+        return f"FileRecord(pk={self.pk!r}, rel_path={self.rel_path!r})"

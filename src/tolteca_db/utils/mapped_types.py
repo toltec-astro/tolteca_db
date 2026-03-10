@@ -25,21 +25,18 @@ __all__ = [
 ]
 
 # Primary Key Types
-# DuckDB best practice: Use Sequence() to avoid PostgreSQL SERIAL type
+# DuckDB requires Sequence() to avoid PostgreSQL SERIAL type.
 # See: https://github.com/Mause/duckdb_engine#auto-incrementing-id-columns
-# 
-# NOTE: Each table needs its own sequence. The sequence name is automatically
-# generated based on the table name when you use this Pk type.
-#
-# WARNING: This creates a generic sequence that will be shared across tables!
-# If you need per-table sequences, define them explicitly in your model.
+# SQLite silently ignores Sequence and uses ROWID-based autoincrement.
+# The shared sequence produces globally-unique IDs across all tables, which
+# is sufficient — per-table consecutiveness is not needed.
 Pk = Annotated[
     int,
     mapped_column(
         Integer,
-        Sequence("generic_pk_seq"),  # Shared sequence for all tables
+        Sequence("tolteca_db_pk_seq"),
         primary_key=True,
-        comment="Primary key",
+        comment="Integer primary key",
     ),
 ]
 

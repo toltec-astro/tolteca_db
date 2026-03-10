@@ -1,7 +1,7 @@
 # tolteca_db v3.x Task Tracking
 
 **Status:** Active  
-**Last Updated:** 2025-07-14  
+**Last Updated:** 2025-07-15  
 **Branch:** `v3.x`
 
 ---
@@ -49,41 +49,50 @@
 
 ---
 
-## Phase 2: ORM Models ⬜ NOT STARTED
+## Phase 2: ORM Models ✅ COMPLETE
 
 **Goal:** Clean SQLAlchemy 2.x ORM layer; all tables defined once, no duplicates.
 
-- [ ] `src/tolteca_db/models/orm/__init__.py` — re-export all ORM classes
-- [ ] `src/tolteca_db/models/orm/base.py`
-  - [ ] `Base = DeclarativeBase()` (SQLAlchemy 2.x style)
-  - [ ] `TimestampMixin` — `created_at`, `updated_at`
-  - [ ] `UIDMixin` — `uid: Mapped[str]` primary key
+**10 tables, 34 tests — all passing. Commit: Phase 2 complete.**
 
-- [ ] `src/tolteca_db/models/orm/registry.py`
-  - [ ] `RawObsRecord` — `uid` (obsspec string), `master`, `obsnum`, `subobsnum`, `scannum`, `obs_type`, `source`, `timestamp_obs`
-  - [ ] `DataProdRecord` — `uid`, `raw_obs_uid` FK, `interface`, `storage_root_id` FK, `rel_path`, `file_size`, `checksum`, `availability`
+### Schema summary
 
-- [ ] `src/tolteca_db/models/orm/data_prod.py`
-  - [ ] `StorageRootRecord` — `uid`, `host`, `root_path`, `is_local`
-  - [ ] `FileRecord` — `uid`, `data_prod_uid` FK, `abs_path`, `mtime`, `size`, `checksum`
+| Table | PK | Key columns |
+|---|---|---|
+| `raw_obs` | `uid` (str, e.g. `"tcs-98765-0-0"`) | `master`, `obsnum`, `subobsnum`, `scannum`, `timestamp_obs`, `meta` |
+| `data_prod` | `pk` (int, seq) | `uid` (unique str), `raw_obs_uid` FK, `data_prod_type`, `interface`, catalog columns¹, `availability`, `meta` |
+| `storage_root` | `pk` (int, seq) | `label` (unique), `host`, `root_path`, `is_local` |
+| `file_record` | `pk` (int, seq) | `data_prod_fk`, `storage_root_fk`, `rel_path`, `mtime`, `file_size`, `checksum` |
+| `assoc` | `pk` (int, seq) | `uid` (unique), `rule_name`, `context` (JSON), `status`, `score` |
+| `assoc_edge` | `pk` (int, seq) | `assoc_fk`, `data_prod_fk`, `role` |
+| `obs_flag` | `pk` (int, seq) | `raw_obs_uid` FK (str), `flag_reason`, `flag_source`, `flagged_at` |
+| `data_prod_flag` | `pk` (int, seq) | `data_prod_fk`, `flag_reason`, `flag_source`, `flagged_at` |
+| `task` | `pk` (int, seq) | `uid` (unique), `assoc_fk` nullable, `task_type`, `status`, `started_at`, `completed_at` |
+| `event` | `pk` (int, seq) | `event_type`, `entity_type`, `entity_id`, `payload` (JSON), `occurred_at` |
 
-- [ ] `src/tolteca_db/models/orm/assoc.py`
-  - [ ] `AssocRecord` — `uid`, `rule_name`, `inputs` (JSON), `outputs` (JSON), `status`, `score`
-  - [ ] `AssocEdgeRecord` — `assoc_uid`, `data_prod_uid`, `role`
+¹ Catalog columns on `data_prod`: `nw`, `array_name`, `data_kind`, `n_chans`, `n_samples`, `lo_center_freq_hz`, `drive_atten_db`, `sense_atten_db`, `nc_path`, `zarr_path` — all nullable, for direct tolteca_web catalog join.
 
-- [ ] `src/tolteca_db/models/orm/flag.py`
-  - [ ] `ObsFlagRecord` — `raw_obs_uid` FK, `flag_reason`, `flag_source`, `flagged_at`
-  - [ ] `DataProdFlagRecord` — `data_prod_uid` FK, `flag_reason`, `flag_source`, `flagged_at`
+### Key design decisions (2025-07-15)
+- `RawObsRecord.uid` is string PK (ObsSpec.uid, e.g. `"tcs-98765-0-0"`) — human-readable, no surrogate int
+- `DataProdRecord` stores all tolteca_web catalog columns directly (no JSON parsing at query time)
+- `Pk = Annotated[int, mapped_column(Integer, Sequence("tolteca_db_pk_seq"), primary_key=True)]` — DuckDB-compatible; SQLite ignores Sequence
+- All int PK tables share one sequence name `"tolteca_db_pk_seq"` (uniqueness per table is guaranteed by auto-increment; shared name is fine)
+- Test backend: SQLite `"sqlite:///:memory:"` — DuckDB compat deferred to Phase 4
 
-- [ ] `src/tolteca_db/models/orm/task.py`
-  - [ ] `TaskRecord` — `uid`, `assoc_uid` FK, `task_type`, `status`, `started_at`, `completed_at`, `error_msg`
-
-- [ ] `src/tolteca_db/models/orm/event.py`
-  - [ ] `EventRecord` — `uid`, `event_type`, `payload` (JSON), `created_at`
-
-- [ ] `tests/test_models_orm.py`
-  - [ ] Table creation with SQLite in-memory DB
-  - [ ] Basic insert/select round-trips for each table
+### Files changed
+- [x] `src/tolteca_db/utils/mapped_types.py` — renamed Sequence `"generic_pk_seq"` → `"tolteca_db_pk_seq"`
+- [x] `src/tolteca_db/utils/__init__.py` — stripped v2.5 uid/hashing re-exports
+- [x] `src/tolteca_db/models/orm/base.py` — simplified: just `DeclarativeBase`
+- [x] `src/tolteca_db/models/orm/registry.py` — NEW: `RawObsRecord` + `DataProdRecord`
+- [x] `src/tolteca_db/models/orm/data_prod.py` — REWRITTEN: `StorageRootRecord` + `FileRecord`
+- [x] `src/tolteca_db/models/orm/assoc.py` — REWRITTEN: `AssocRecord` + `AssocEdgeRecord`
+- [x] `src/tolteca_db/models/orm/flag.py` — REWRITTEN: `ObsFlagRecord` + `DataProdFlagRecord`
+- [x] `src/tolteca_db/models/orm/task.py` — REWRITTEN: `TaskRecord`
+- [x] `src/tolteca_db/models/orm/event.py` — REWRITTEN: `EventRecord`
+- [x] `src/tolteca_db/models/orm/__init__.py` — re-exports all 11 v3.x classes
+- [x] `src/tolteca_db/models/__init__.py` — updated to v3.x class names
+- [x] `tests/test_models_orm.py` — NEW: 34 tests in 8 test classes
+- [x] `tests/conftest.py` — updated: SQLite engine, removed v2.5 fixtures
 
 ---
 
