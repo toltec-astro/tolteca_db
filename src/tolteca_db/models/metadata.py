@@ -1,624 +1,660 @@
-"""Typed metadata models for TolTEC data products.
+"""Domain-layer dataclasses for tolteca_db entities.
 
-This module defines dataclass-based metadata models for structured metadata
-stored in the DataProd.meta JSON field using adaptix's AdaptixJSON.
-These provide type safety and IDE autocomplete for TolTEC-specific metadata.
+These are plain Python frozen dataclasses that mirror the ORM record structure
+but are fully decoupled from SQLAlchemy.  They serve as the currency of the
+Repository layer — all Repository methods accept and return these objects.
 
-Reference: ADR-009 in design/architecture.md, Phase 3 of adaptix integration
+ORM → domain
+    Manual converter functions (e.g. :func:`raw_obs_from_record`) are provided
+    for each entity.  We use manual converters rather than
+    ``adaptix.conversion.get_converter`` because the ORM models use
+    ``from __future__ import annotations`` combined with ``TYPE_CHECKING``-only
+    imports for circular relationship references, which prevents adaptix from
+    resolving the full type-hint graph at converter-creation time in Python 3.14.
+
+domain ↔ JSON dict
+    A module-level :data:`retort` (``adaptix.Retort``) handles bidirectional
+    JSON serialisation:
+
+    - ``retort.dump(obj)`` → JSON-compatible dict (``datetime`` → ISO-8601 string).
+    - ``retort.load(data, Type)`` → domain object (ISO string → ``datetime``).
+
+    Use :func:`to_dict` / :func:`from_dict` as thin convenience wrappers.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from adaptix import Retort
-from adaptix.integrations.sqlalchemy import AdaptixJSON
-from sqlalchemy.types import JSON
 
-from tolteca_db.constants import DataProdType, ToltecDataKind
-
-# Global retort for adaptix conversions across all ORM models
-# Used by AdaptixJSON in data_prod.py and source.py
-# Centralized here to ensure consistent serialization behavior
-# Union discrimination: Uses Literal type on TelInterfaceMeta.interface for discrimination
-# - RoachInterfaceMeta: interface = str | None (roach interface names)
-# - TelInterfaceMeta: interface = Literal["tel_toltec"] (explicit discriminator)
-_retort = Retort()
-
-# Shared JSON type instance for DuckDB compatibility
-# DuckDB uses JSON (not JSONB), and AdaptixJSON requires a type instance (not class)
-_json_type = JSON()
-
-
-def adaptix_json_type(metadata_type) -> AdaptixJSON:
-    """
-    Create AdaptixJSON column type for DuckDB-compatible JSON storage.
-
-    Centralizes the configuration of AdaptixJSON to ensure:
-    - Single JSON() type instance shared across all uses
-    - DuckDB compatibility (uses JSON, not PostgreSQL's JSONB)
-    - Type-safe metadata serialization via adaptix
-
-    Parameters
-    ----------
-    metadata_type : type[T]
-        The metadata dataclass type (e.g., AnyDataProdMeta, ProcessContext)
-
-    Returns
-    -------
-    AdaptixJSON[T]
-        Configured AdaptixJSON type for SQLAlchemy mapped_column()
-
-    Examples
-    --------
-    >>> meta: Mapped[AnyDataProdMeta] = mapped_column(
-    ...     adaptix_json_type(AnyDataProdMeta),
-    ...     nullable=False,
-    ... )
-
-    Notes
-    -----
-    - Uses shared _json_type instance for memory efficiency
-    - impl=JSON() is required because AdaptixJSON defaults to JSONB for
-      PostgreSQL-derived dialects (duckdb-engine inherits from PostgreSQL)
-    - DuckDB only supports JSON type, not JSONB
-    """
-    return AdaptixJSON(_retort, metadata_type, impl=_json_type)
-
+if TYPE_CHECKING:
+    from tolteca_db.models.orm.assoc import AssocEdgeRecord, AssocRecord
+    from tolteca_db.models.orm.data_prod import FileRecord, StorageRootRecord
+    from tolteca_db.models.orm.event import EventRecord
+    from tolteca_db.models.orm.flag import DataProdFlagRecord, ObsFlagRecord
+    from tolteca_db.models.orm.registry import DataProdRecord, RawObsRecord
+    from tolteca_db.models.orm.task import TaskRecord
 
 __all__ = [
-    "_retort",
-    "_json_type",
-    "adaptix_json_type",
-    "AnyDataProdMeta",
-    "AnyInterfaceMeta",
-    "AstigGroupMeta",
-    "CalGroupMeta",
-    "DataProdMetaBase",
-    "DrivefitMeta",
-    "FocusGroupMeta",
-    "MetadataType",
-    "NamedGroupMeta",
-    "ObsIdMixin",
-    "ProcessContext",
-    "RawObsMeta",
-    "ReducedObsMeta",
-    "RoachInterfaceMeta",
-    "RoachMetaMixin",
-    "TelInterfaceMeta",
-    "TelMetaMixin",
+    # Domain dataclasses
+    "RawObs",
+    "DataProd",
+    "StorageRoot",
+    "StorageFile",
+    "AssocGroup",
+    "AssocEdge",
+    "ObsFlag",
+    "DataProdFlag",
+    "Task",
+    "Event",
+    # ORM → domain converters
+    "raw_obs_from_record",
+    "data_prod_from_record",
+    "storage_root_from_record",
+    "storage_file_from_record",
+    "assoc_group_from_record",
+    "assoc_edge_from_record",
+    "obs_flag_from_record",
+    "data_prod_flag_from_record",
+    "task_from_record",
+    "event_from_record",
+    # JSON serialisation
+    "retort",
+    "to_dict",
+    "from_dict",
 ]
 
 
-# ==================== Shared Mixin Classes ====================
+# ---------------------------------------------------------------------------
+# Domain dataclasses
+# ---------------------------------------------------------------------------
 
 
-@dataclass
-class ObsIdMixin:
-    """Core observation identification fields shared across interfaces and products.
+@dataclass(frozen=True)
+class RawObs:
+    """Domain object for a raw TolTEC observation.
 
-    These fields uniquely identify a TolTEC observation quartet.
-    Used by both interface-level metadata (RoachInterfaceMeta, TelInterfaceMeta)
-    and data product-level metadata (RawObsMeta, ReducedObsMeta, etc.).
-    """
-
-    obsnum: int = 0
-    subobsnum: int = 0
-    scannum: int = 0
-    master: str = ""
-
-
-@dataclass
-class RoachMetaMixin:
-    """Roach interface metadata fields.
-
-    Used by RoachInterfaceMeta (interface-level, complete roach state).
-    Each roach interface has its own metadata stored in DataProdSource.meta.
-    """
-
-    nw_id: int | None = None
-    roach: int | None = None
-    interface: str | None = None
-    hostname: str | None = None
-
-
-@dataclass
-class TelMetaMixin:
-    """LMT telescope metadata fields shared between interface and product levels.
-
-    Used by:
-    - TelInterfaceMeta (interface-level, complete telescope state)
-    - RawObsMeta (data product-level, denormalized for query efficiency)
-
-    Fields include project info, timing, pointing, optics, and conditions.
-    Enables queries like "tau < 0.1" without joining through DataProdSource.
-    """
-
-    # Observation metadata
-    obs_datetime: datetime | None = None
-    source_name: str | None = None
-    obs_goal: str | None = None
-
-    # Project and program
-    project_id: str | None = None
-    obs_pgm: str | None = None
-
-    # Timing
-    integration_time: float | None = None
-
-    # Pointing
-    az_deg: float | None = None
-    el_deg: float | None = None
-    user_az_offset_arcsec: float | None = None
-    user_el_offset_arcsec: float | None = None
-    paddle_az_offset_arcsec: float | None = None
-    paddle_el_offset_arcsec: float | None = None
-
-    # Optics
-    m1_zernike: list[float] | None = None  # 7 Zernike coefficients (microns)
-    m2_offset_mm: tuple[float, float, float] | None = None  # X, Y, Z offsets (mm)
-
-    # Atmospheric conditions
-    tau: float | None = None
-    crane_in_beam: bool | None = None
-
-
-# ==================== Base Classes ====================
-
-
-@dataclass(kw_only=True)
-class DataProdMetaBase:
-    """Base metadata for all data products.
+    Mirrors :class:`~tolteca_db.models.orm.registry.RawObsRecord` without
+    SQLAlchemy instrumentation.
 
     Attributes
     ----------
-    name : str
-        Unique product name
-    data_prod_type : DataProdType
-        TolTEC product type (dp_raw_obs, dp_reduced_obs, etc.)
-    description : str | None
-        Optional human-readable description
-    obs_datetime : datetime | None
-        Observation datetime (for raw obs) or latest member obs datetime (for groups).
-        Used by tolteca_web for datetime filtering across all data product types.
-
-    Notes
-    -----
-    Using dataclasses with adaptix's AdaptixJSON for type-safe JSON storage.
-    No runtime validation overhead - type safety enforced by type checkers.
-    Fields are keyword-only to allow mixing with mixin classes that have defaults.
-    """
-
-    name: str
-    data_prod_type: DataProdType
-    description: str | None = None
-    obs_datetime: datetime | None = None
-
-
-@dataclass
-class RawObsMeta(DataProdMetaBase, ObsIdMixin, TelMetaMixin):
-    """Metadata for dp_raw_obs - aggregates from all interface sources.
-
-    Data product-level metadata combining:
-    - Core identification (ObsIdMixin) - from all interfaces
-    - Tel metadata (TelMetaMixin) - denormalized from TelInterfaceMeta for query efficiency
-    - Data kind field - TolTEC-specific acquisition mode
-
-    Architecture
-    ------------
-    Uses true inheritance from mixins to share field definitions:
-    - ObsIdMixin: obsnum, subobsnum, scannum, master
-    - TelMetaMixin: project_id, tau, az_deg, source_name, m1_zernike, etc.
-
-    Denormalization Strategy
-    ------------------------
-    Tel fields are duplicated from TelInterfaceMeta (DataProdSource.meta) to enable
-    efficient queries without JOINs:
-
-    GOOD: WHERE meta['tau'] < 0.1  # Direct query, O(1) index lookup
-    BAD:  JOIN data_prod_source ... WHERE src.meta['tau'] < 0.1  # Expensive JOIN
-
-    For master='tcs': Tel fields populated from TelInterfaceMeta
-    For master='ics': Tel fields remain None (no tel interface exists)
-
-    Attributes
-    ----------
-    tag : Literal["raw_obs"]
-        Discriminator for union type deserialization
-    data_kind : int
-        Data acquisition mode flags (from ToltecDataKind enum)
-
-    Notes
-    -----
-    All observation identification and telescope metadata fields inherited from mixins.
-    See ObsIdMixin and TelMetaMixin for complete field list.
-    Roach interface metadata (nw_id, roach, interface, hostname) is stored in
-    DataProdSource.meta (RoachInterfaceMeta), not aggregated to DataProd level.
-    """
-
-    tag: Literal["raw_obs"] = "raw_obs"  # Discriminator for union types
-
-    # TolTEC-specific field
-    data_kind: int = 0  # ToltecDataKind flag value
-
-    # Note: All other fields inherited from mixins:
-    # - ObsIdMixin: obsnum, subobsnum, scannum, master
-    # - TelMetaMixin: obs_datetime, source_name, obs_goal, project_id, obs_pgm,
-    #                 integration_time, az_deg, el_deg, user_az_offset_arcsec,
-    #                 user_el_offset_arcsec, paddle_az_offset_arcsec,
-    #                 paddle_el_offset_arcsec, m1_zernike, m2_offset_mm,
-    #                 tau, crane_in_beam
-
-
-@dataclass
-class ReducedObsMeta(DataProdMetaBase, ObsIdMixin):
-    """Metadata for dp_reduced_obs.
-
-    Attributes
-    ----------
-    tag : Literal["reduced_obs"]
-        Discriminator for union type deserialization
-    reduction_method : str | None
-        Reduction method used (inline, offline, etc.)
-    calibration_version : str | None
-        Calibration version identifier
-    processing_date : str | None
-        ISO8601 processing timestamp
-    quality_score : float | None
-        Quality metric (0-1 scale, validated at application layer)
-
-    Notes
-    -----
-    Identification fields (obsnum, subobsnum, scannum, master) inherited from ObsIdMixin.
-    """
-
-    tag: Literal["reduced_obs"] = "reduced_obs"  # Discriminator for union types
-    reduction_method: str | None = None
-    calibration_version: str | None = None
-    processing_date: str | None = None
-    quality_score: float | None = None
-
-
-@dataclass
-class CalGroupMeta(DataProdMetaBase, ObsIdMixin):
-    """Metadata for dp_cal_group.
-
-    Attributes
-    ----------
-    tag : Literal["cal_group"]
-        Discriminator for union type deserialization
-    n_items : int
-        Number of raw observations in group
-    group_type : str | None
-        Calibration group type
-    date_range : tuple[str, str] | None
-        Start and end dates of calibration data
-    obs_datetime : datetime | None
-        Latest observation datetime from group members (for tolteca_web filtering)
-
-    Notes
-    -----
-    Identification fields (obsnum, master) inherited from ObsIdMixin.
-    subobsnum and scannum not used for calibration groups.
-    """
-
-    tag: Literal["cal_group"] = "cal_group"  # Discriminator for union types
-    n_items: int = 0
-    group_type: str | None = None
-    date_range: tuple[str, str] | None = None
-
-
-@dataclass
-class DrivefitMeta(DataProdMetaBase, ObsIdMixin):
-    """Metadata for dp_drivefit.
-
-    Attributes
-    ----------
-    tag : Literal["drivefit"]
-        Discriminator for union type deserialization
-    n_items : int
-        Number of raw observations used
-    fit_method : str | None
-        Fitting method/algorithm
-    convergence_status : str | None
-        Fit convergence status
-    chi_squared : float | None
-        Chi-squared goodness of fit (non-negative, validated at application layer)
-    obs_datetime : datetime | None
-        Latest observation datetime from group members (for tolteca_web filtering)
-
-    Notes
-    -----
-    Identification fields (obsnum, master) inherited from ObsIdMixin.
-    """
-
-    tag: Literal["drivefit"] = "drivefit"  # Discriminator for union types
-    n_items: int = 0
-    fit_method: str | None = None
-    convergence_status: str | None = None
-    chi_squared: float | None = None
-
-
-@dataclass
-class FocusGroupMeta(DataProdMetaBase, ObsIdMixin):
-    """Metadata for dp_focus_group.
-
-    Attributes
-    ----------
-    tag : Literal["focus_group"]
-        Discriminator for union type deserialization
-    n_items : int
-        Number of raw observations in group
-    focus_positions : list[float] | None
-        Focus positions sampled
-    best_focus : float | None
-        Optimal focus position
-    focus_metric : str | None
-        Metric used (FWHM, Strehl, etc.)
-    obs_datetime : datetime | None
-        Latest observation datetime from group members (for tolteca_web filtering)
-
-    Notes
-    -----
-    Identification fields (obsnum, master) inherited from ObsIdMixin.
-    """
-
-    tag: Literal["focus_group"] = "focus_group"  # Discriminator for union types
-    n_items: int = 0
-    focus_positions: list[float] | None = None
-    best_focus: float | None = None
-    focus_metric: str | None = None
-
-
-@dataclass
-class AstigGroupMeta(DataProdMetaBase, ObsIdMixin):
-    """Metadata for dp_astig_group.
-
-    Attributes
-    ----------
-    tag : Literal["astig_group"]
-        Discriminator for union type deserialization
-    n_items : int
-        Number of raw observations in group
-    astig_positions : list[tuple[float, float]] | None
-        Astigmatism correction positions sampled (x, y)
-    best_astig : tuple[float, float] | None
-        Optimal astigmatism correction (x, y)
-    astig_metric : str | None
-        Metric used (FWHM, Strehl, etc.)
-    obs_datetime : datetime | None
-        Latest observation datetime from group members (for tolteca_web filtering)
-
-    Notes
-    -----
-    Identification fields (obsnum, master) inherited from ObsIdMixin.
-    """
-
-    tag: Literal["astig_group"] = "astig_group"  # Discriminator for union types
-    n_items: int = 0
-    astig_positions: list[tuple[float, float]] | None = None
-    best_astig: tuple[float, float] | None = None
-    astig_metric: str | None = None
-
-
-@dataclass
-class OofGroupMeta(DataProdMetaBase, ObsIdMixin):
-    """Metadata for dp_oof_group (Out-of-Focus holography).
-
-    Attributes
-    ----------
-    tag : Literal["oof_group"]
-        Discriminator for union type deserialization
-    n_items : int
-        Number of raw observations in group
-    oof_positions : list[float] | None
-        Out-of-focus positions sampled (defocus values)
-    surface_rms : float | None
-        Measured surface RMS from holography
-    oof_metric : str | None
-        Metric used for analysis
-    obs_datetime : datetime | None
-        Latest observation datetime from group members (for tolteca_web filtering)
-
-    Notes
-    -----
-    Identification fields (obsnum, master) inherited from ObsIdMixin.
-    Out-of-focus holography is used for primary mirror surface measurements.
-    """
-
-    tag: Literal["oof_group"] = "oof_group"  # Discriminator for union types
-    n_items: int = 0
-    oof_positions: list[float] | None = None
-    surface_rms: float | None = None
-    oof_metric: str | None = None
-
-
-@dataclass
-class NamedGroupMeta(DataProdMetaBase):
-    """Metadata specific to dp_named_group.
-
-    Attributes
-    ----------
-    group_name : str
-        User-defined group name
-    n_items : int
-        Number of products in group
-    tags : list[str] | None
-        Optional tags for categorization
-    owner : str | None
-        Group owner/creator
-    notes : str | None
-        Free-form notes
-    """
-
-    tag: Literal["named_group"] = "named_group"  # Discriminator for union types
-    group_name: str = ""
-    n_items: int = 0
-    tags: list[str] | None = None
-    owner: str | None = None
-    notes: str | None = None
-
-
-# ==================== Interface-Level Metadata ====================
-
-
-@dataclass
-class RoachInterfaceMeta(ObsIdMixin, RoachMetaMixin):
-    """Roach interface metadata for TolTEC detector network files.
-
-    Interface-level metadata for toltec0-12 roach interfaces.
-    Stored in DataProdSource.meta for roach interface files.
-    Contains detector acquisition state including network ID, roach number,
-    interface name, and hostname.
-
-    Attributes
-    ----------
-    data_kind : int | None
-        ToltecDataKind flag value (inherited from parent DataProd)
-    type : Literal["roach"]
-        Type discriminator for adaptix union handling
-
-    (Inherited from ObsIdMixin)
-    obsnum : int
-        Observation number
-    subobsnum : int
-        Sub-observation number
-    scannum : int
-        Scan number
+    uid : str
+        ObsSpec UID, e.g. ``"tcs-98765-0-0"``.
     master : str
-        Master identifier (e.g., 'toltec', 'tcs', 'ics')
-
-    (Inherited from RoachMetaMixin)
-    nw_id : int | None
-        Network ID for roach data
-    roach : int | None
-        Roach number (0-12)
-    interface : str | None
-        Interface name (e.g., 'toltec0', 'toltec1')
-    hostname : str | None
-        Acquisition computer hostname
-
-    Notes
-    -----
-    Previously called InterfaceFileMeta.
-    Renamed to RoachInterfaceMeta for consistency with TelInterfaceMeta.
+        Master type (``tcs``, ``ics``, ``clip``).
+    obsnum : int
+        Observation number.
+    subobsnum : int
+        Sub-observation number.
+    scannum : int
+        Scan number.
+    timestamp_obs : datetime | None
+        UTC timestamp of observation start.
+    meta : dict | None
+        Optional JSON metadata.
+    created_at : datetime
+        Database insert timestamp.
     """
 
-    # Explicit type discriminator for adaptix union handling
-    type: Literal["roach"] = "roach"
+    uid: str
+    master: str
+    obsnum: int
+    subobsnum: int
+    scannum: int
+    timestamp_obs: datetime | None
+    meta: dict[str, Any] | None
+    created_at: datetime
 
-    # Data kind inherited from parent DataProd
-    data_kind: int | None = None
 
+@dataclass(frozen=True)
+class DataProd:
+    """Domain object for a logical TolTEC data product.
 
-@dataclass
-class TelInterfaceMeta(ObsIdMixin, TelMetaMixin):
-    """LMT telescope interface metadata for TolTEC observations.
-
-    Interface-level metadata for tel_toltec interface.
-    Stored in DataProdSource.meta for tel interface files.
-    Represents complete telescope state during observation including
-    pointing, mirror configuration, and atmospheric conditions.
-    Sourced from LMT metadata database CSV export.
-
-    Architecture
-    ------------
-    Uses mixins to share field definitions with RawObsMeta:
-    - ObsIdMixin: obsnum, subobsnum, scannum, master
-    - TelMetaMixin: project_id, tau, az_deg, source_name, m1_zernike, etc.
-
-    This ensures type consistency between interface-level (complete state)
-    and data product-level (denormalized subset) metadata.
+    Mirrors :class:`~tolteca_db.models.orm.registry.DataProdRecord`.
+    All tolteca_web catalog columns are preserved so the Repository can return
+    catalog-ready rows without additional SQL joins.
 
     Attributes
     ----------
-    data_kind : int
-        ToltecDataKind flag value (ToltecDataKind.LmtTel for tel files)
-    type : Literal["tel"]
-        Type discriminator for adaptix union handling
-    interface : Literal["tel_toltec"]
-        Interface identifier (always "tel_toltec")
-    receiver : str
-        Receiver name (always "Toltec")
-    instrument : str
-        Instrument name (always "tel")
-    main_time : float
-        Main beam time (seconds)
-    ref_time : float
-        Reference time (seconds)
-    valid : bool
-        Valid data flag
-
-    Notes
-    -----
-    Tel interface exists only for master='tcs' observations.
-    ICS observations do not have corresponding tel metadata.
-
-    Fields from mixins (obsnum, master, tau, az_deg, etc.) inherited.
-    See ObsIdMixin and TelMetaMixin for complete field list.
+    pk : int
+        Integer primary key.
+    uid : str
+        Human-readable unique identifier.
+    raw_obs_uid : str
+        Parent observation UID.
+    data_prod_type : str
+        Product type (e.g. ``dp_raw_obs``, ``dp_zarr_sweep``).
+    interface : str
+        Interface identifier (e.g. ``toltec0``, ``tel_toltec``).
+    nw : int | None
+        Roach network index (0-12).
+    array_name : str | None
+        Array name (``a1100``, ``a1400``, ``a2000``).
+    data_kind : str | None
+        Data kind label (``VnaSweep``, ``TargetSweep``, …).
+    n_chans : int | None
+        Number of detector channels.
+    n_samples : int | None
+        Number of samples.
+    lo_center_freq_hz : float | None
+        LO centre frequency in Hz.
+    drive_atten_db : float | None
+        Drive attenuation in dB.
+    sense_atten_db : float | None
+        Sense attenuation in dB.
+    nc_path : str | None
+        Path to the original netCDF file.
+    zarr_path : str | None
+        Path to the derived zarr store.
+    availability : str | None
+        Availability state.
+    meta : dict | None
+        Optional JSON metadata.
+    created_at : datetime
+        Database insert timestamp.
+    updated_at : datetime
+        Last update timestamp.
     """
 
-    # Explicit type discriminator for adaptix union handling
-    type: Literal["tel"] = "tel"
-
-    # Data kind for tel files
-    data_kind: int = field(default_factory=lambda: ToltecDataKind.LmtTel.value)
-
-    # Interface identifiers (Literal type for union discrimination)
-    interface: Literal["tel_toltec"] = "tel_toltec"
-    receiver: str = "Toltec"
-    instrument: str = "tel"
-
-    # Additional timing (not in TelMetaMixin)
-    main_time: float = 0.0
-    ref_time: float = 0.0
-
-    # Validation flag
-    valid: bool = True
-
-    # Note: All other fields inherited from mixins:
-    # - ObsIdMixin: obsnum, subobsnum, scannum, master
-    # - TelMetaMixin: obs_datetime, source_name, project_id, integration_time,
-    #                 az_deg, el_deg, tau, m1_zernike, m2_offset_mm, etc.
+    pk: int
+    uid: str
+    raw_obs_uid: str
+    data_prod_type: str
+    interface: str
+    nw: int | None
+    array_name: str | None
+    data_kind: str | None
+    n_chans: int | None
+    n_samples: int | None
+    lo_center_freq_hz: float | None
+    drive_atten_db: float | None
+    sense_atten_db: float | None
+    nc_path: str | None
+    zarr_path: str | None
+    availability: str | None
+    meta: dict[str, Any] | None
+    created_at: datetime
+    updated_at: datetime
 
 
-@dataclass
-class ProcessContext:
-    """Process metadata for DataProdAssoc context field.
+@dataclass(frozen=True)
+class StorageRoot:
+    """Domain object for a data storage root.
+
+    Mirrors :class:`~tolteca_db.models.orm.data_prod.StorageRootRecord`.
 
     Attributes
     ----------
-    module : str | None
-        Processing module name
-    version : str | None
-        Processing version
-    config : dict[str, Any] | None
-        Processing configuration
+    pk : int
+        Integer primary key.
+    label : str
+        Unique human-readable label.
+    host : str | None
+        Hostname for remote roots.
+    root_path : str
+        Absolute path or URI prefix.
+    is_local : bool
+        ``True`` if root is locally accessible.
+    meta : dict | None
+        Optional JSON metadata.
+    created_at : datetime
+        Database insert timestamp.
     """
 
-    module: str | None = None
-    version: str | None = None
-    config: dict[str, Any] | None = None
+    pk: int
+    label: str
+    host: str | None
+    root_path: str
+    is_local: bool
+    meta: dict[str, Any] | None
+    created_at: datetime
 
 
-# Union type for interface-level metadata (DataProdSource.meta)
-# For raw interface files: roach interfaces OR tel interface
-AnyInterfaceMeta = TelInterfaceMeta | RoachInterfaceMeta
+@dataclass(frozen=True)
+class StorageFile:
+    """Domain object for a physical file record.
 
-# Union type for DataProd.meta (polymorphic metadata with Literal discriminators)
-# For data products: raw obs uses interface metadata, others have their own
-AnyDataProdMeta = (
-    RawObsMeta
-    | ReducedObsMeta
-    | CalGroupMeta
-    | DrivefitMeta
-    | FocusGroupMeta
-    | AstigGroupMeta
-    | OofGroupMeta
-    | NamedGroupMeta
-)
+    Mirrors :class:`~tolteca_db.models.orm.data_prod.FileRecord` (renamed to
+    ``StorageFile`` to avoid collision with the ORM class name).
 
-# Union type for all metadata (includes interface metadata and dict fallback)
-MetadataType = AnyDataProdMeta | AnyInterfaceMeta | dict[str, Any]
+    Attributes
+    ----------
+    pk : int
+        Integer primary key.
+    data_prod_fk : int
+        Foreign key to :class:`DataProd`.
+    storage_root_fk : int | None
+        Foreign key to :class:`StorageRoot`; ``None`` if root is unknown.
+    rel_path : str
+        Path relative to the storage root.
+    mtime : float | None
+        POSIX modification timestamp.
+    file_size : int | None
+        File size in bytes.
+    checksum : str | None
+        Content checksum (e.g. ``"blake3:abcd..."``).
+    created_at : datetime
+        Database insert timestamp.
+    updated_at : datetime
+        Last update timestamp.
+    """
+
+    pk: int
+    data_prod_fk: int
+    storage_root_fk: int | None
+    rel_path: str
+    mtime: float | None
+    file_size: int | None
+    checksum: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class AssocEdge:
+    """Domain object for a single association edge.
+
+    Mirrors :class:`~tolteca_db.models.orm.assoc.AssocEdgeRecord`.
+
+    Attributes
+    ----------
+    pk : int
+        Integer primary key.
+    assoc_fk : int
+        Foreign key to the parent :class:`AssocGroup`.
+    data_prod_fk : int
+        Foreign key to the linked :class:`DataProd`.
+    role : str
+        Role label (e.g. ``"input"``, ``"output"``).
+    """
+
+    pk: int
+    assoc_fk: int
+    data_prod_fk: int
+    role: str
+
+
+@dataclass(frozen=True)
+class AssocGroup:
+    """Domain object for an association group.
+
+    Mirrors :class:`~tolteca_db.models.orm.assoc.AssocRecord`.
+    Related :class:`AssocEdge` objects are loaded separately by the Repository.
+
+    Attributes
+    ----------
+    pk : int
+        Integer primary key.
+    uid : str
+        Unique identifier.
+    rule_name : str
+        Name of the association rule that created this group.
+    context : dict | None
+        Rule-specific context parameters.
+    status : str
+        Status string (e.g. ``"pending"``, ``"complete"``).
+    score : float | None
+        Optional quality score.
+    created_at : datetime
+        Database insert timestamp.
+    updated_at : datetime
+        Last update timestamp.
+    """
+
+    pk: int
+    uid: str
+    rule_name: str
+    context: dict[str, Any] | None
+    status: str
+    score: float | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class ObsFlag:
+    """Domain object for an observation-level quality flag.
+
+    Mirrors :class:`~tolteca_db.models.orm.flag.ObsFlagRecord`.
+
+    Attributes
+    ----------
+    pk : int
+        Integer primary key.
+    raw_obs_uid : str
+        UID of the flagged observation.
+    flag_reason : str
+        Human-readable reason for the flag.
+    flag_source : str
+        Source that set the flag (e.g. ``"manual"``, ``"pipeline"``).
+    flagged_at : datetime
+        Timestamp when the flag was set.
+    """
+
+    pk: int
+    raw_obs_uid: str
+    flag_reason: str
+    flag_source: str
+    flagged_at: datetime
+
+
+@dataclass(frozen=True)
+class DataProdFlag:
+    """Domain object for a data-product-level quality flag.
+
+    Mirrors :class:`~tolteca_db.models.orm.flag.DataProdFlagRecord`.
+
+    Attributes
+    ----------
+    pk : int
+        Integer primary key.
+    data_prod_fk : int
+        Foreign key to the flagged :class:`DataProd`.
+    flag_reason : str
+        Human-readable reason for the flag.
+    flag_source : str
+        Source that set the flag.
+    flagged_at : datetime
+        Timestamp when the flag was set.
+    """
+
+    pk: int
+    data_prod_fk: int
+    flag_reason: str
+    flag_source: str
+    flagged_at: datetime
+
+
+@dataclass(frozen=True)
+class Task:
+    """Domain object for a pipeline task.
+
+    Mirrors :class:`~tolteca_db.models.orm.task.TaskRecord`.
+
+    Attributes
+    ----------
+    pk : int
+        Integer primary key.
+    uid : str
+        Unique task identifier.
+    assoc_fk : int | None
+        Optional foreign key to parent :class:`AssocGroup`.
+    task_type : str
+        Task type label (e.g. ``"ingest"``, ``"reduce"``).
+    status : str
+        Current status (``"queued"``, ``"running"``, ``"done"``, …).
+    started_at : datetime | None
+        When the task started execution.
+    completed_at : datetime | None
+        When the task completed.
+    error_msg : str | None
+        Error message if the task failed.
+    meta : dict | None
+        Optional JSON metadata.
+    created_at : datetime
+        Database insert timestamp.
+    updated_at : datetime
+        Last update timestamp.
+    """
+
+    pk: int
+    uid: str
+    assoc_fk: int | None
+    task_type: str
+    status: str
+    started_at: datetime | None
+    completed_at: datetime | None
+    error_msg: str | None
+    meta: dict[str, Any] | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class Event:
+    """Domain object for an immutable event log entry.
+
+    Mirrors :class:`~tolteca_db.models.orm.event.EventRecord`.
+
+    Attributes
+    ----------
+    seq : int
+        Monotonically-increasing sequence number (primary key).
+    event_type : str
+        Event type label (e.g. ``"obs.created"``, ``"dp.updated"``).
+    entity_type : str
+        Type of the affected entity (e.g. ``"raw_obs"``, ``"data_prod"``).
+    entity_id : str
+        String identifier of the affected entity.
+    payload : dict | None
+        Optional event payload.
+    occurred_at : datetime
+        When the event occurred.
+    """
+
+    seq: int
+    event_type: str
+    entity_type: str
+    entity_id: str
+    payload: dict[str, Any] | None
+    occurred_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# ORM → Domain converters
+#
+# Manual implementations are used rather than adaptix.conversion.get_converter
+# because the ORM models combine `from __future__ import annotations` with
+# TYPE_CHECKING-only circular imports for relationship fields.  Python 3.14's
+# stricter forward-reference evaluation causes NameError when adaptix calls
+# get_type_hints() on those classes at converter-creation time.
+# ---------------------------------------------------------------------------
+
+
+def raw_obs_from_record(rec: RawObsRecord) -> RawObs:
+    """Convert :class:`~tolteca_db.models.orm.registry.RawObsRecord` → :class:`RawObs`."""
+    return RawObs(
+        uid=rec.uid,
+        master=rec.master,
+        obsnum=rec.obsnum,
+        subobsnum=rec.subobsnum,
+        scannum=rec.scannum,
+        timestamp_obs=rec.timestamp_obs,
+        meta=rec.meta,
+        created_at=rec.created_at,
+    )
+
+
+def data_prod_from_record(rec: DataProdRecord) -> DataProd:
+    """Convert :class:`~tolteca_db.models.orm.registry.DataProdRecord` → :class:`DataProd`."""
+    return DataProd(
+        pk=rec.pk,
+        uid=rec.uid,
+        raw_obs_uid=rec.raw_obs_uid,
+        data_prod_type=rec.data_prod_type,
+        interface=rec.interface,
+        nw=rec.nw,
+        array_name=rec.array_name,
+        data_kind=rec.data_kind,
+        n_chans=rec.n_chans,
+        n_samples=rec.n_samples,
+        lo_center_freq_hz=rec.lo_center_freq_hz,
+        drive_atten_db=rec.drive_atten_db,
+        sense_atten_db=rec.sense_atten_db,
+        nc_path=rec.nc_path,
+        zarr_path=rec.zarr_path,
+        availability=rec.availability,
+        meta=rec.meta,
+        created_at=rec.created_at,
+        updated_at=rec.updated_at,
+    )
+
+
+def storage_root_from_record(rec: StorageRootRecord) -> StorageRoot:
+    """Convert :class:`~tolteca_db.models.orm.data_prod.StorageRootRecord` → :class:`StorageRoot`."""
+    return StorageRoot(
+        pk=rec.pk,
+        label=rec.label,
+        host=rec.host,
+        root_path=rec.root_path,
+        is_local=rec.is_local,
+        meta=rec.meta,
+        created_at=rec.created_at,
+    )
+
+
+def storage_file_from_record(rec: FileRecord) -> StorageFile:
+    """Convert :class:`~tolteca_db.models.orm.data_prod.FileRecord` → :class:`StorageFile`."""
+    return StorageFile(
+        pk=rec.pk,
+        data_prod_fk=rec.data_prod_fk,
+        storage_root_fk=rec.storage_root_fk,
+        rel_path=rec.rel_path,
+        mtime=rec.mtime,
+        file_size=rec.file_size,
+        checksum=rec.checksum,
+        created_at=rec.created_at,
+        updated_at=rec.updated_at,
+    )
+
+
+def assoc_group_from_record(rec: AssocRecord) -> AssocGroup:
+    """Convert :class:`~tolteca_db.models.orm.assoc.AssocRecord` → :class:`AssocGroup`."""
+    return AssocGroup(
+        pk=rec.pk,
+        uid=rec.uid,
+        rule_name=rec.rule_name,
+        context=rec.context,
+        status=rec.status,
+        score=rec.score,
+        created_at=rec.created_at,
+        updated_at=rec.updated_at,
+    )
+
+
+def assoc_edge_from_record(rec: AssocEdgeRecord) -> AssocEdge:
+    """Convert :class:`~tolteca_db.models.orm.assoc.AssocEdgeRecord` → :class:`AssocEdge`."""
+    return AssocEdge(
+        pk=rec.pk,
+        assoc_fk=rec.assoc_fk,
+        data_prod_fk=rec.data_prod_fk,
+        role=rec.role,
+    )
+
+
+def obs_flag_from_record(rec: ObsFlagRecord) -> ObsFlag:
+    """Convert :class:`~tolteca_db.models.orm.flag.ObsFlagRecord` → :class:`ObsFlag`."""
+    return ObsFlag(
+        pk=rec.pk,
+        raw_obs_uid=rec.raw_obs_uid,
+        flag_reason=rec.flag_reason,
+        flag_source=rec.flag_source,
+        flagged_at=rec.flagged_at,
+    )
+
+
+def data_prod_flag_from_record(rec: DataProdFlagRecord) -> DataProdFlag:
+    """Convert :class:`~tolteca_db.models.orm.flag.DataProdFlagRecord` → :class:`DataProdFlag`."""
+    return DataProdFlag(
+        pk=rec.pk,
+        data_prod_fk=rec.data_prod_fk,
+        flag_reason=rec.flag_reason,
+        flag_source=rec.flag_source,
+        flagged_at=rec.flagged_at,
+    )
+
+
+def task_from_record(rec: TaskRecord) -> Task:
+    """Convert :class:`~tolteca_db.models.orm.task.TaskRecord` → :class:`Task`."""
+    return Task(
+        pk=rec.pk,
+        uid=rec.uid,
+        assoc_fk=rec.assoc_fk,
+        task_type=rec.task_type,
+        status=rec.status,
+        started_at=rec.started_at,
+        completed_at=rec.completed_at,
+        error_msg=rec.error_msg,
+        meta=rec.meta,
+        created_at=rec.created_at,
+        updated_at=rec.updated_at,
+    )
+
+
+def event_from_record(rec: EventRecord) -> Event:
+    """Convert :class:`~tolteca_db.models.orm.event.EventRecord` → :class:`Event`."""
+    return Event(
+        seq=rec.seq,
+        event_type=rec.event_type,
+        entity_type=rec.entity_type,
+        entity_id=rec.entity_id,
+        payload=rec.payload,
+        occurred_at=rec.occurred_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# JSON serialisation via adaptix Retort
+# ---------------------------------------------------------------------------
+
+#: Global Retort for serialising domain objects to/from JSON-compatible dicts.
+#:
+#: - ``retort.dump(obj)`` → dict with ``datetime`` as ISO-8601 strings.
+#: - ``retort.load(data, SomeType)`` → domain object.
+retort: Retort = Retort()
+
+
+def to_dict(obj: object) -> dict[str, Any]:
+    """Serialise a domain object to a JSON-compatible ``dict``.
+
+    Parameters
+    ----------
+    obj :
+        Any domain dataclass (e.g. :class:`RawObs`, :class:`DataProd`).
+
+    Returns
+    -------
+    dict[str, Any]
+        A plain dict suitable for ``json.dumps()``.  ``datetime`` values are
+        serialised to ISO-8601 strings.
+
+    Examples
+    --------
+    >>> from datetime import datetime, timezone
+    >>> obs = RawObs('tcs-1-0-0', 'tcs', 1, 0, 0, None, None, datetime(2024,1,1, tzinfo=timezone.utc))
+    >>> d = to_dict(obs)
+    >>> d['uid']
+    'tcs-1-0-0'
+    >>> d['created_at']
+    '2024-01-01T00:00:00+00:00'
+    """
+    return retort.dump(obj)  # type: ignore[return-value]
+
+
+def from_dict(data: dict[str, Any], tp: type) -> object:
+    """Deserialise a ``dict`` to a domain object.
+
+    Parameters
+    ----------
+    data :
+        Dict produced by :func:`to_dict` or from a JSON response.
+    tp :
+        Target domain dataclass type (e.g. :class:`RawObs`).
+
+    Returns
+    -------
+    object
+        An instance of *tp*.
+
+    Examples
+    --------
+    >>> from datetime import datetime, timezone
+    >>> obs = RawObs('tcs-1-0-0', 'tcs', 1, 0, 0, None, None, datetime(2024,1,1, tzinfo=timezone.utc))
+    >>> from_dict(to_dict(obs), RawObs) == obs
+    True
+    """
+    return retort.load(data, tp)

@@ -96,21 +96,26 @@
 
 ---
 
-## Phase 3: Metadata Models (adaptix) ⬜ NOT STARTED
+## Phase 3: Metadata Models (adaptix) ✅ COMPLETE
 
-**Goal:** Pydantic-style domain objects with adaptix (de)serialization; separate from ORM.
+**Goal:** Domain-layer frozen dataclasses + ORM→domain converters + Retort JSON serialisation.
 
-- [ ] `src/tolteca_db/models/metadata.py`
-  - [ ] `RawObs` dataclass — mirrors `RawObsRecord` but domain-layer
-  - [ ] `DataProd` dataclass — `obs: RawObs`, `interface`, `storage`, `availability`
-  - [ ] `StorageRoot` dataclass
-  - [ ] `AssocGroup` dataclass — `rule_name`, `inputs: list[DataProd]`, `outputs: list[DataProd]`
-  - [ ] `ObsFlag`, `DataProdFlag` dataclasses
-  - [ ] `adaptix.Converter` setup for ORM → metadata and metadata → ORM conversions
+**25 tests — all passing. Commit: Phase 3 complete.**
 
-- [ ] `tests/test_models_metadata.py`
-  - [ ] Round-trip: ORM record → metadata dataclass → ORM record
-  - [ ] JSON serialization via adaptix
+### What was built
+
+- **10 frozen domain dataclasses** — 1:1 mirror of ORM tables, fully decoupled from SQLAlchemy.
+- **10 manual ORM→domain converter functions** (e.g. `raw_obs_from_record`,  `data_prod_from_record`).
+- **`Retort` JSON serialisation** — `to_dict()` / `from_dict()` for all domain objects; `datetime` → ISO-8601 string.
+
+### Why manual converters instead of `get_converter` (2025-07-15)
+`adaptix.conversion.get_converter` calls `get_type_hints()` on ORM classes at creation time.  Because the ORM modules use `from __future__ import annotations` combined with `TYPE_CHECKING`-only circular imports for relationship fields, Python 3.14 raises `NameError` when trying to evaluate those forward references.  Manual converters avoid this entirely.
+
+### Files changed
+- [x] `src/tolteca_db/models/metadata.py` — REWRITTEN: 10 domain dataclasses + 10 converters + `Retort`
+- [x] `src/tolteca_db/models/__init__.py` — updated to re-export all domain classes + converters
+- [x] `pyproject.toml` — added `filterwarnings` entry for adaptix 3.0.0b11 / Python 3.14 compat (`ForwardRef._evaluate` deprecation)
+- [x] `tests/test_models_metadata.py` — NEW: 25 tests in 7 test classes
 
 ---
 

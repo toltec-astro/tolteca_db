@@ -126,6 +126,9 @@ filterwarnings = [
   "ignore::sqlalchemy.exc.SADeprecationWarning",
   "ignore::pydantic.warnings.PydanticDeprecatedSince20",
   "ignore::dagster_shared.utils.warnings.BetaWarning",
+  # adaptix 3.0.0b11 uses ForwardRef._evaluate (deprecated in Python 3.14)
+  # at import time; safe to ignore until adaptix ships a 3.14-compatible release.
+  "ignore:ForwardRef._evaluate is a private API:DeprecationWarning",
 ]
 markers = [
   "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
