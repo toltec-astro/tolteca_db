@@ -415,7 +415,7 @@ class ValidationConfig(ConfigurableResource):
     - Typical value: 30s (2-3× sensor poll interval for safety margin)
     """
 
-    max_interface_count: int = 14  # 0-12: toltec interfaces, 13: hwpr
+    max_interface_count: int = 13  # toltec0–toltec12
     disabled_interfaces: list[int] = []
     # Time since LAST Valid=1 transition (resets on each new valid) before marking complete
     validation_timeout_seconds: float = 30.0

@@ -20,7 +20,14 @@ from tolteca_db.db import Database, create_database
 __all__ = [
     "TestToltecDBResource",
     "SimulatorConfig",
+    "_insert_next_quartet_from_real_db",
 ]
+
+# Alias for backwards compatibility with tests
+def _insert_next_quartet_from_real_db(context, session, source_db_url: str) -> None:
+    """Alias for _insert_next_quartet_from_source_db (backwards compat)."""
+    from .test_assets import _insert_next_quartet_from_source_db
+    _insert_next_quartet_from_source_db(context, session, source_db_url)
 
 
 # Module-level singleton for shared test database

@@ -10,11 +10,9 @@ from tolteca_db.constants import (
     DataKind,
     DataProdAssocType,
     DataProdType,
-    FlagSeverity,
     MasterType,
     ReducedStatus,
     StorageRole,
-    TaskStatus,
     ToltecDataKind,
     ToltecInfo,
 )
@@ -36,12 +34,12 @@ class TestMasterType:
 
     def test_str_value_equals_name(self):
         """StrEnum: str(member) is its value."""
-        assert str(MasterType.ics) == "ics"
-        assert MasterType.tcs == "tcs"
+        assert str(MasterType.ICS) == "ics"
+        assert MasterType.TCS == "tcs"
 
     def test_is_str(self):
         """MasterType instances are str instances."""
-        assert isinstance(MasterType.clip, str)
+        assert isinstance(MasterType.CLIP, str)
 
 
 class TestToltecInfo:
@@ -64,10 +62,10 @@ class TestToltecInfo:
 
     def test_interface_master_mapping(self):
         """Roach interfaces map to ics; tel_toltec maps to tcs."""
-        assert ToltecInfo.interface_master["toltec0"] == MasterType.ics
-        assert ToltecInfo.interface_master["hwpr"] == MasterType.ics
-        assert ToltecInfo.interface_master["tel_toltec"] == MasterType.tcs
-        assert ToltecInfo.interface_master["tel_toltec2"] == MasterType.tcs
+        assert ToltecInfo.interface_master["toltec0"] == MasterType.ICS
+        assert ToltecInfo.interface_master["hwpr"] == MasterType.ICS
+        assert ToltecInfo.interface_master["tel_toltec"] == MasterType.TCS
+        assert ToltecInfo.interface_master["tel_toltec2"] == MasterType.TCS
 
     def test_array_mapping_coverage(self):
         """All 13 roach interfaces have an array name."""
@@ -85,14 +83,14 @@ class TestDataProdType:
     """Tests for DataProdType StrEnum."""
 
     def test_value_is_lowercase_name(self):
-        """auto() produces lowercase member-name values."""
-        assert DataProdType.dp_raw_obs == "dp_raw_obs"
-        assert DataProdType.dp_reduced_obs == "dp_reduced_obs"
-        assert DataProdType.dp_named_group == "dp_named_group"
+        """UPPERCASE member names produce lowercase values via StrEnum+auto()."""
+        assert DataProdType.DP_RAW_OBS == "dp_raw_obs"
+        assert DataProdType.DP_REDUCED_OBS == "dp_reduced_obs"
+        assert DataProdType.DP_NAMED_GROUP == "dp_named_group"
 
     def test_is_str(self):
         """Members are str instances."""
-        assert isinstance(DataProdType.dp_raw_obs, str)
+        assert isinstance(DataProdType.DP_RAW_OBS, str)
 
     def test_all_obs_types_present(self):
         """Check that the expected set of observation-level types exist."""
@@ -128,20 +126,6 @@ class TestStrEnums:
         values = {m.value for m in ReducedStatus}
         assert "active" in values
         assert "superseded" in values
-
-    def test_task_status_values(self):
-        values = {m.value for m in TaskStatus}
-        assert values >= {"queued", "running", "done", "error"}
-
-    def test_flag_severity_order(self):
-        """info<warn<block<critical by str comparison via sorted()."""
-        levels = list(FlagSeverity)
-        assert set(levels) == {
-            FlagSeverity.info,
-            FlagSeverity.warn,
-            FlagSeverity.block,
-            FlagSeverity.critical,
-        }
 
     def test_storage_role_values(self):
         values = {m.value for m in StorageRole}

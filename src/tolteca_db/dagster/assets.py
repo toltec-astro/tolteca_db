@@ -11,12 +11,12 @@ Modern graph-backed asset implementing fan-out/fan-in pattern:
 # Dagster's runtime type validation requires actual type objects, not strings
 # See: https://github.com/dagster-io/dagster/issues/28342
 
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from dagster import (
     AssetExecutionContext,
-    AutoMaterializePolicy,
-    Config,
+    AutomationCondition,
     DynamicOut,
     DynamicOutput,
     OpExecutionContext,
@@ -29,10 +29,11 @@ from .partitions import quartet_partitions
 __all__ = ["process_quartet", "association_groups"]
 
 
-class QuartetMetadata(Config):
-    """Configuration for quartet processing.
+@dataclass
+class QuartetMetadata:
+    """Data for a quartet, parsed from partition key.
 
-    Parsed from partition key format: "ics-{obsnum}-{subobsnum}-{scannum}"
+    Partition key format: "ics-{obsnum}-{subobsnum}-{scannum}"
     """
 
     master: str
@@ -41,7 +42,8 @@ class QuartetMetadata(Config):
     scannum: int
 
 
-class InterfaceData(Config):
+@dataclass
+class InterfaceData:
     """Data for a single interface."""
 
     interface: str
@@ -51,7 +53,8 @@ class InterfaceData(Config):
     processed_at: str
 
 
-class QuartetResult(Config):
+@dataclass
+class QuartetResult:
     """Results from processing all interfaces in quartet."""
 
     quartet_key: str
@@ -112,7 +115,7 @@ def query_quartet(context: OpExecutionContext) -> QuartetMetadata:
     required_resource_keys={"toltec_db", "validation"},
     out=DynamicOut(),
 )
-def fan_out_interfaces(context: OpExecutionContext, metadata: QuartetMetadata):
+def fan_out_interfaces(context: OpExecutionContext, quartet_meta: QuartetMetadata):
     """
     Fan-out to all enabled interfaces in quartet.
 
@@ -123,7 +126,7 @@ def fan_out_interfaces(context: OpExecutionContext, metadata: QuartetMetadata):
     ----------
     context : OpExecutionContext
         Execution context
-    metadata : QuartetMetadata
+    quartet_meta : QuartetMetadata
         Quartet metadata from query_quartet op
 
     Yields
@@ -134,7 +137,7 @@ def fan_out_interfaces(context: OpExecutionContext, metadata: QuartetMetadata):
     Examples
     --------
     >>> # For quartet "ics-18846-0-0":
-    >>> outputs = fan_out_interfaces(context, metadata)
+    >>> outputs = fan_out_interfaces(context, quartet_meta)
     >>> # Yields 11 DynamicOutputs (one per enabled interface)
     >>> # Each has mapping_key="toltec0", "toltec1", ..., "toltec12"
     """
@@ -145,17 +148,17 @@ def fan_out_interfaces(context: OpExecutionContext, metadata: QuartetMetadata):
 
     with toltec_db.get_session() as session:
         quartet_status = query_quartet_status(
-            master=metadata.master,
-            obsnum=metadata.obsnum,
-            subobsnum=metadata.subobsnum,
-            scannum=metadata.scannum,
+            master=quartet_meta.master,
+            obsnum=quartet_meta.obsnum,
+            subobsnum=quartet_meta.subobsnum,
+            scannum=quartet_meta.scannum,
             session=session,
         )
 
     if not quartet_status:
         raise RuntimeError(
-            f"Quartet not found: {metadata.master}-{metadata.obsnum}-"
-            f"{metadata.subobsnum}-{metadata.scannum}"
+            f"Quartet not found: {quartet_meta.master}-{quartet_meta.obsnum}-"
+            f"{quartet_meta.subobsnum}-{quartet_meta.scannum}"
         )
 
     disabled_interfaces = validation.disabled_interfaces
@@ -197,7 +200,7 @@ def fan_out_interfaces(context: OpExecutionContext, metadata: QuartetMetadata):
 )
 def process_interface(
     context: OpExecutionContext,
-    metadata: QuartetMetadata,
+    quartet_meta: QuartetMetadata,
     interface_data: InterfaceData,
 ) -> dict:
     """
@@ -211,7 +214,7 @@ def process_interface(
     ----------
     context : OpExecutionContext
         Execution context
-    metadata : QuartetMetadata
+    quartet_meta : QuartetMetadata
         Quartet metadata
     interface_data : InterfaceData
         Interface-specific data
@@ -223,7 +226,7 @@ def process_interface(
 
     Examples
     --------
-    >>> result = process_interface(context, metadata, interface_data)
+    >>> result = process_interface(context, quartet_meta, interface_data)
     >>> result["interface"]  # "toltec0"
     >>> result["status"]     # "success"
     >>> result["rows_processed"]  # 4096
@@ -239,10 +242,10 @@ def process_interface(
 
         with toltec_db.get_session() as session:
             result = process_interface_data(
-                master=metadata.master,
-                obsnum=metadata.obsnum,
-                subobsnum=metadata.subobsnum,
-                scannum=metadata.scannum,
+                master=quartet_meta.master,
+                obsnum=quartet_meta.obsnum,
+                subobsnum=quartet_meta.subobsnum,
+                scannum=quartet_meta.scannum,
                 roach_index=interface_data.roach_index,
                 session=session,
                 tolteca_db=tolteca_db,
@@ -277,7 +280,7 @@ def process_interface(
 )
 def collect_results(
     context: OpExecutionContext,
-    metadata: QuartetMetadata,
+    quartet_meta: QuartetMetadata,
     interface_results: list[dict],
 ) -> QuartetResult:
     """
@@ -287,7 +290,7 @@ def collect_results(
     ----------
     context : OpExecutionContext
         Execution context
-    metadata : QuartetMetadata
+    quartet_meta : QuartetMetadata
         Quartet metadata
     interface_results : list[dict]
         Results from process_interface mapped ops
@@ -299,7 +302,7 @@ def collect_results(
 
     Examples
     --------
-    >>> result = collect_results(context, metadata, interface_results)
+    >>> result = collect_results(context, quartet_meta, interface_results)
     >>> result.quartet_key  # "ics-18846-0-0"
     >>> result.success_count  # 11
     >>> result.processed_interfaces  # 11
@@ -307,7 +310,7 @@ def collect_results(
     from tolteca_db.utils.uid import make_raw_obs_uid
 
     quartet_key = make_raw_obs_uid(
-        metadata.master, metadata.obsnum, metadata.subobsnum, metadata.scannum
+        quartet_meta.master, quartet_meta.obsnum, quartet_meta.subobsnum, quartet_meta.scannum
     )
 
     success_count = sum(1 for r in interface_results if r["status"] == "success")
@@ -353,10 +356,10 @@ def collect_results(
         # Add tel CSV metadata (from test_lmtmc.csv)
         # This now includes file paths from the CSV's FileName column
         csv_result = add_tel_csv_metadata(
-            master=metadata.master,
-            obsnum=metadata.obsnum,
-            subobsnum=metadata.subobsnum,
-            scannum=metadata.scannum,
+            master=quartet_meta.master,
+            obsnum=quartet_meta.obsnum,
+            subobsnum=quartet_meta.subobsnum,
+            scannum=quartet_meta.scannum,
             data_prod_pk=data_prod_pk,
             tolteca_db=tolteca_db,
             location=location,
@@ -458,7 +461,7 @@ from dagster import asset  # noqa: E402
     description="Generate data product associations incrementally",
     required_resource_keys={"tolteca_db"},
     deps=[process_quartet],
-    auto_materialize_policy=AutoMaterializePolicy.eager(),
+    automation_condition=AutomationCondition.eager(),
 )
 def association_groups(context: AssetExecutionContext) -> dict:
     """

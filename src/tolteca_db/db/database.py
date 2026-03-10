@@ -202,6 +202,7 @@ class Database(ABC):
             DataKind,
             DataProd,
             DataProdAssoc,
+            DataProdAssocType,
             DataProdDataKind,
             DataProdFlag,
             DataProdSource,
@@ -209,9 +210,6 @@ class Database(ABC):
             EventLog,
             Flag,
             Location,
-            ReductionTask,
-            TaskInput,
-            TaskOutput,
         )
 
         # Apply dialect-specific DDL modifications

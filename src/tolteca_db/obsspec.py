@@ -35,15 +35,15 @@ __all__ = [
 # ---------------------------------------------------------------------------
 _PATH_PATTERNS: list[tuple[re.Pattern[str], MasterType]] = [
     # toltecN_OBSNUM_SUBOBS_SCAN[_suffix].ext  (N = roach index 0-12)
-    (re.compile(r"^toltec\d+_(\d+)_(\d+)_(\d+)"), MasterType.ics),
+    (re.compile(r"^toltec\d+_(\d+)_(\d+)_(\d+)"), MasterType.ICS),
     # icsN_OBSNUM_SUBOBS_SCAN[_suffix].ext
-    (re.compile(r"^ics\d*_(\d+)_(\d+)_(\d+)"), MasterType.ics),
+    (re.compile(r"^ics\d*_(\d+)_(\d+)_(\d+)"), MasterType.ICS),
     # hwpr_OBSNUM_SUBOBS_SCAN[_suffix].ext
-    (re.compile(r"^hwpr_(\d+)_(\d+)_(\d+)"), MasterType.ics),
+    (re.compile(r"^hwpr_(\d+)_(\d+)_(\d+)"), MasterType.ICS),
     # tel_toltec[N]_OBSNUM_SUBOBS_SCAN[_suffix].ext
-    (re.compile(r"^tel_toltec\d*_(\d+)_(\d+)_(\d+)"), MasterType.tcs),
+    (re.compile(r"^tel_toltec\d*_(\d+)_(\d+)_(\d+)"), MasterType.TCS),
     # clip_OBSNUM_SUBOBS_SCAN[_suffix].ext
-    (re.compile(r"^clip_(\d+)_(\d+)_(\d+)"), MasterType.clip),
+    (re.compile(r"^clip_(\d+)_(\d+)_(\d+)"), MasterType.CLIP),
 ]
 
 

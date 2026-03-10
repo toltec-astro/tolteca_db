@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import warnings
 from pathlib import Path  # noqa: F401
 
@@ -14,6 +15,10 @@ try:
     warnings.filterwarnings("ignore", category=ConfigArgumentWarning)
 except ImportError:
     pass
+
+# Set required env vars for Dagster module-level initialization so that
+# dagster/__init__.py can be imported during test collection without failing.
+os.environ.setdefault("TOLTEC_DB_SOURCE_URL", "sqlite:///:memory:")
 
 # v3.x ORM is available — import Base directly.
 from sqlalchemy import create_engine, text

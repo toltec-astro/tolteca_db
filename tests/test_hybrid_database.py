@@ -76,7 +76,6 @@ def test_database_sqlite_mode(temp_dir):
         location = Location(
             label="test",
             root_uri="file:///test",
-            description="Test location",
         )
         session.add(location)
         session.commit()
@@ -105,7 +104,7 @@ def test_database_readonly_mode(temp_dir):
         session.flush()
 
         product = DataProd(
-            label="test_product",
+            uid="test-product-uid",
             data_prod_type_fk=prod_type.pk,
         )
         session.add(product)
@@ -120,7 +119,7 @@ def test_database_readonly_mode(temp_dir):
     with db_read.session() as session:
         products = session.query(DataProd).all()
         assert len(products) == 1
-        assert products[0].label == "test_product"
+        assert products[0].uid == "test-product-uid"
 
     db_read.close()
 
@@ -191,7 +190,7 @@ def test_join_metadata_parquet(temp_dir):
 
         for obs_id in [1, 2]:
             product = DataProd(
-                label=f"obs_{obs_id}",
+                uid=f"obs_{obs_id}",
                 data_prod_type_fk=prod_type.pk,
             )
             session.add(product)
@@ -200,19 +199,19 @@ def test_join_metadata_parquet(temp_dir):
     # Join metadata with Parquet
     result = db.execute_raw(f"""
         SELECT
-            dp.label as product_label,
+            dp.uid as product_uid,
             COUNT(*) as row_count,
             AVG(obs.flux) as mean_flux
         FROM data_prod dp
         JOIN '{temp_dir / "obs_*.parquet"}' obs
-          ON obs.obs_id = CAST(SPLIT_PART(dp.label, '_', 2) AS INTEGER)
-        GROUP BY dp.label
-        ORDER BY dp.label
+          ON obs.obs_id = CAST(SPLIT_PART(dp.uid, '_', 2) AS INTEGER)
+        GROUP BY dp.uid
+        ORDER BY dp.uid
     """)
     df = result.df()
 
     assert len(df) == 2
-    assert df["product_label"].tolist() == ["obs_1", "obs_2"]
+    assert df["product_uid"].tolist() == ["obs_1", "obs_2"]
     assert all(df["row_count"] == 3)
 
     db.close()
@@ -263,7 +262,8 @@ def test_sqlite_dialect_constraints(temp_dir):
     # Verify tables created
     with db.session() as session:
         # Check that tables exist by querying
-        result = session.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        from sqlalchemy import text
+        result = session.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
         tables = [row[0] for row in result]
         assert "data_prod" in tables
         assert "location" in tables
@@ -309,7 +309,7 @@ def test_concurrent_reads(temp_dir, sample_parquet):
 
         for i in range(5):
             product = DataProd(
-                label=f"obs_{i}",
+                uid=f"obs_{i}",
                 data_prod_type_fk=prod_type.pk,
             )
             session.add(product)

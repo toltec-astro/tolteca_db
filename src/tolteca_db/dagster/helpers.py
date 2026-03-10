@@ -6,18 +6,131 @@ simplified for the quartet-level architecture.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 __all__ = [
+    "query_obs_timestamp",
+    "query_toltec_db_observation",
+    "query_toltec_db_interface",
     "query_toltec_db_since",
     "query_quartet_status",
+    "query_toltec_db_quartet_status",
     "process_interface_data",
     "add_tel_csv_metadata",
 ]
+
+
+def query_obs_timestamp(
+    master: str,
+    obsnum: int,
+    subobsnum: int,
+    scannum: int,
+) -> datetime:
+    """Return current UTC datetime as a mock observation timestamp.
+
+    Parameters
+    ----------
+    master, obsnum, subobsnum, scannum :
+        Quartet identifiers (not used in mock).
+
+    Returns
+    -------
+    datetime
+        Timezone-aware UTC datetime.
+    """
+    return datetime.now(timezone.utc)
+
+
+def query_toltec_db_observation(
+    master: str,
+    obsnum: int,
+    subobsnum: int,
+    scannum: int,
+) -> dict:
+    """Return a mock observation metadata dict.
+
+    Parameters
+    ----------
+    master, obsnum, subobsnum, scannum :
+        Quartet identifiers echoed back in result.
+
+    Returns
+    -------
+    dict
+        Keys: master, obsnum, subobsnum, scannum, obs_type,
+        timestamp, data_kind.
+    """
+    return {
+        "master": master,
+        "obsnum": obsnum,
+        "subobsnum": subobsnum,
+        "scannum": scannum,
+        "obs_type": "science",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "data_kind": "RawTimeStream",
+    }
+
+
+def query_toltec_db_interface(
+    master: str,
+    *args: int,
+    obsnum: int | None = None,
+    subobsnum: int = 0,
+    scannum: int = 0,
+    roach_index: int = 0,
+) -> dict:
+    """Return a mock interface metadata dict.
+
+    Supports both keyword arguments and two positional signatures:
+    - 5-arg: ``(master, obsnum, subobsnum, scannum, roach_index)``
+    - 6-arg: ``(master, nw_id, obsnum, subobsnum, scannum, roach_index)``
+    - keyword: ``(master, obsnum=..., subobsnum=..., scannum=..., roach_index=...)``
+
+    Returns
+    -------
+    dict
+        Keys: master, obsnum, subobsnum, scannum, roach_index, interface,
+        array_name, valid, filename, timestamp.
+    """
+    from .partitions import get_array_name_for_interface
+
+    # Resolve positional vs keyword arguments
+    if args and obsnum is not None:
+        raise TypeError(
+            "query_toltec_db_interface: cannot mix positional and keyword args"
+        )
+    if args:
+        if len(args) == 5:
+            # (master, nw_id, obsnum, subobsnum, scannum, roach_index)
+            _nw_id, obsnum, subobsnum, scannum, roach_index = args
+        elif len(args) == 4:
+            # (master, obsnum, subobsnum, scannum, roach_index)
+            obsnum, subobsnum, scannum, roach_index = args
+        else:
+            raise ValueError(
+                f"query_toltec_db_interface: expected 5 or 6 positional args, "
+                f"got {len(args) + 1}"
+            )
+    elif obsnum is None:
+        raise TypeError("query_toltec_db_interface: obsnum is required")
+
+    iface = f"toltec{roach_index}"
+    return {
+        "master": master,
+        "obsnum": obsnum,
+        "subobsnum": subobsnum,
+        "scannum": scannum,
+        "roach_index": roach_index,
+        "interface": iface,
+        "array_name": get_array_name_for_interface(iface),
+        "valid": 1,
+        "filename": f"{iface}_{obsnum}_{subobsnum}_{scannum}.nc",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def query_toltec_db_since(
@@ -52,6 +165,9 @@ def query_toltec_db_since(
     ...     obs = query_toltec_db_since(since, session)
     >>> len(obs)  # New observations since 2024-01-01
     """
+    if session is None:
+        raise ValueError("session parameter is required")
+
     from sqlalchemy import text
 
     # Query all observations with timestamp >= since_dt
@@ -78,7 +194,7 @@ def query_toltec_db_since(
     )
 
     result = session.execute(query, {"since_dt": since_dt.strftime("%Y-%m-%d %H:%M:%S")})
-    rows = result.fetchall()
+    rows = list(result)
 
     # Convert to list of dicts
     observations = []
@@ -635,3 +751,46 @@ def add_tel_csv_metadata(
                 "source_uri": None,
                 "status": "csv_row_not_found",
             }
+
+
+def query_toltec_db_quartet_status(
+    master: str,
+    obsnum: int,
+    subobsnum: int,
+    scannum: int,
+    num_interfaces: int = 13,
+) -> dict:
+    """Return a mock quartet status dict for unit-testing without a real DB.
+
+    Parameters
+    ----------
+    master, obsnum, subobsnum, scannum : str/int
+        Quartet identifiers (used in mock key construction only).
+    num_interfaces : int
+        Number of interfaces to report as valid (default: 13).
+
+    Returns
+    -------
+    dict
+        Keys: interfaces, valid_interfaces, invalid_interfaces,
+        missing_interfaces, valid_count, total_found,
+        first_valid_time, last_valid_time, time_since_last_valid,
+        new_quartet_detected.
+    """
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    all_interfaces = list(range(num_interfaces))
+    return {
+        "interfaces": all_interfaces,
+        "valid_interfaces": all_interfaces,
+        "invalid_interfaces": [],
+        "missing_interfaces": [],
+        "valid_count": num_interfaces,
+        "total_found": num_interfaces,
+        "first_valid_time": now_iso,
+        "last_valid_time": now_iso,
+        "time_since_last_valid": 0.0,
+        "new_quartet_detected": False,
+        "first_created": now,
+        "last_updated": now,
+    }

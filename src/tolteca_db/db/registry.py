@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from tolteca_db.constants import DataProdAssocType as DataProdAssocTypeConst
 from tolteca_db.constants import DataProdType as DataProdTypeConst
-from tolteca_db.constants import FlagSeverity, ToltecDataKind
+from tolteca_db.constants import ToltecDataKind
 from tolteca_db.models.orm import (
     DataKind,
     DataProdAssocType,
@@ -113,17 +113,18 @@ def populate_registry_tables(session: Session) -> dict[str, int]:
             counts["data_kind"] += 1
     
     # Populate Flag severity levels
-    for severity in FlagSeverity:
+    _severity_levels = ["INFO", "WARNING", "ERROR", "CRITICAL"]
+    for sev_label in _severity_levels:
         stmt = select(Flag).where(
-            (Flag.namespace == "severity") & 
-            (Flag.label == severity.value.upper())
+            (Flag.namespace == "severity") &
+            (Flag.label == sev_label)
         )
         existing = session.scalar(stmt)
         if not existing:
             new_flag = Flag(
                 namespace="severity",
-                label=severity.value.upper(),
-                description=f"Flag severity level: {severity.value}",
+                label=sev_label,
+                description=f"Flag severity level: {sev_label.lower()}",
             )
             session.add(new_flag)
             counts["flag"] += 1

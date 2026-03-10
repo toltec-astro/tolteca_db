@@ -24,7 +24,7 @@ from tolteca_db.utils.uid import make_raw_obs_uid
 
 from .assets import process_quartet
 
-__all__ = ["quartet_sensor"]
+__all__ = ["quartet_sensor", "sync_with_toltec_db"]
 
 
 def _roach_index_to_interface(roach_index: int) -> str:
@@ -501,3 +501,7 @@ def quartet_sensor(context: SensorEvaluationContext):
         return run_requests
     else:
         return SkipReason("No complete quartets found")
+
+
+# Alias for backwards compatibility
+sync_with_toltec_db = quartet_sensor

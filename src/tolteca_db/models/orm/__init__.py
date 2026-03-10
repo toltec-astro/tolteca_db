@@ -3,43 +3,42 @@
 Module layout
 -------------
 - base.py       — ``Base`` (DeclarativeBase)
-- registry.py   — ``RawObsRecord``, ``DataProdRecord``
-- data_prod.py  — ``StorageRootRecord``, ``FileRecord``
-- assoc.py      — ``AssocRecord``, ``AssocEdgeRecord``
-- flag.py       — ``ObsFlagRecord``, ``DataProdFlagRecord``
-- task.py       — ``TaskRecord``
-- event.py      — ``EventRecord``
+- registry.py   — ``Location``
+- data_prod.py  — ``DataKind``, ``DataProdType``, ``DataProd``,
+                  ``DataProdDataKind``, ``DataProdSource``
+- assoc.py      — ``DataProdAssocType``, ``DataProdAssoc``
+- flag.py       — ``Flag``, ``DataProdFlag``
+- event.py      — ``EventLog``
 
 Import this package to register all mappers with ``Base.metadata``.
 """
 
 from __future__ import annotations
 
-from tolteca_db.models.orm.assoc import AssocEdgeRecord, AssocRecord
+from tolteca_db.models.orm.assoc import DataProdAssoc, DataProdAssocType
 from tolteca_db.models.orm.base import Base
-from tolteca_db.models.orm.data_prod import FileRecord, StorageRootRecord
-from tolteca_db.models.orm.event import EventRecord
-from tolteca_db.models.orm.flag import DataProdFlagRecord, ObsFlagRecord
-from tolteca_db.models.orm.registry import DataProdRecord, RawObsRecord
-from tolteca_db.models.orm.task import TaskRecord
+from tolteca_db.models.orm.data_prod import (
+    DataKind,
+    DataProd,
+    DataProdDataKind,
+    DataProdSource,
+    DataProdType,
+)
+from tolteca_db.models.orm.event import EventLog
+from tolteca_db.models.orm.flag import DataProdFlag, Flag
+from tolteca_db.models.orm.registry import Location
 
 __all__ = [
     "Base",
-    # Core registry
-    "RawObsRecord",
-    "DataProdRecord",
-    # Storage
-    "StorageRootRecord",
-    "FileRecord",
-    # Associations
-    "AssocRecord",
-    "AssocEdgeRecord",
-    # Flags
-    "ObsFlagRecord",
-    "DataProdFlagRecord",
-    # Tasks
-    "TaskRecord",
-    # Events
-    "EventRecord",
+    "Location",
+    "DataKind",
+    "DataProdType",
+    "DataProd",
+    "DataProdDataKind",
+    "DataProdSource",
+    "DataProdAssocType",
+    "DataProdAssoc",
+    "Flag",
+    "DataProdFlag",
+    "EventLog",
 ]
-

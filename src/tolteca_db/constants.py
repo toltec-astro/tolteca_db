@@ -2,6 +2,9 @@
 
 Defines TolTEC instrument constants, master types, data kinds, and
 data product type enumerations used throughout the database layer.
+
+Enum convention: UPPERCASE member names produce lowercase values via
+``StrEnum + auto()``. E.g. ``ReducedStatus.ACTIVE == "active"``.
 """
 
 from __future__ import annotations
@@ -13,11 +16,9 @@ __all__ = [
     "DataKind",
     "DataProdAssocType",
     "DataProdType",
-    "FlagSeverity",
     "MasterType",
     "ReducedStatus",
     "StorageRole",
-    "TaskStatus",
     "ToltecDataKind",
     "ToltecInfo",
 ]
@@ -26,13 +27,13 @@ __all__ = [
 class MasterType(StrEnum):
     """TolTEC master controller types."""
 
-    tcs = auto()
+    TCS = auto()
     """The Telescope Control System."""
 
-    ics = auto()
+    ICS = auto()
     """The Instrument Control System."""
 
-    clip = auto()
+    CLIP = auto()
     """The ROACH manager (CLIP)."""
 
 
@@ -43,34 +44,16 @@ type MasterNameT = Literal["tcs", "ics", "clip"]
 class ReducedStatus(StrEnum):
     """Lifecycle status for reduced data products."""
 
-    active = auto()
-    superseded = auto()
-
-
-class TaskStatus(StrEnum):
-    """Reduction task status."""
-
-    queued = auto()
-    running = auto()
-    done = auto()
-    error = auto()
-
-
-class FlagSeverity(StrEnum):
-    """Quality flag severity levels."""
-
-    info = auto()
-    warn = auto()
-    block = auto()
-    critical = auto()
+    ACTIVE = auto()
+    SUPERSEDED = auto()
 
 
 class StorageRole(StrEnum):
     """Storage location role."""
 
-    primary = auto()
-    mirror = auto()
-    temp = auto()
+    PRIMARY = auto()
+    MIRROR = auto()
+    TEMP = auto()
 
 
 class DataProdType(StrEnum):
@@ -84,36 +67,36 @@ class DataProdType(StrEnum):
     """
 
     # Observation-level (L0/L1)
-    dp_raw_obs = auto()
+    DP_RAW_OBS = auto()
     """All detector acquisitions (VnaSweep, TargSweep, Tune, RawTimeStream)."""
 
-    dp_reduced_obs = auto()
+    DP_REDUCED_OBS = auto()
     """Calibrated observations (inline or offline reduction)."""
 
     # Analysis-level (L2+)
-    dp_cal_group = auto()
+    DP_CAL_GROUP = auto()
     """Calibration groupings for analysis."""
 
-    dp_drivefit = auto()
+    DP_DRIVEFIT = auto()
     """Detector characterisation."""
 
-    dp_focus_group = auto()
+    DP_FOCUS_GROUP = auto()
     """Focus analysis groupings."""
 
-    dp_astig_group = auto()
+    DP_ASTIG_GROUP = auto()
     """Astigmatism analysis groupings."""
 
-    dp_oof_group = auto()
+    DP_OOF_GROUP = auto()
     """Out-of-focus holography groupings."""
 
-    dp_map = auto()
+    DP_MAP = auto()
     """Science maps (future)."""
 
-    dp_catalog = auto()
+    DP_CATALOG = auto()
     """Source catalogs (future)."""
 
     # Meta-level
-    dp_named_group = auto()
+    DP_NAMED_GROUP = auto()
     """User-defined collections."""
 
 
@@ -126,34 +109,34 @@ class DataProdAssocType(StrEnum):
     """
 
     # Calibration relationships (self-referencing on dp_raw_obs)
-    dpa_raw_obs_cal_obs = auto()
+    DPA_RAW_OBS_CAL_OBS = auto()
     """Raw obs uses cal obs as calibration source.
 
     Examples: RawTimeStream → Tune, Tune → VnaSweep.
     """
 
     # Reduction relationships
-    dpa_reduced_obs_raw_obs = auto()
+    DPA_REDUCED_OBS_RAW_OBS = auto()
     """Reduced obs derived from raw obs."""
 
     # Analysis relationships
-    dpa_cal_group_raw_obs = auto()
+    DPA_CAL_GROUP_RAW_OBS = auto()
     """Cal group contains raw obs."""
 
-    dpa_drivefit_raw_obs = auto()
+    DPA_DRIVEFIT_RAW_OBS = auto()
     """Drivefit uses raw obs."""
 
-    dpa_focus_group_raw_obs = auto()
+    DPA_FOCUS_GROUP_RAW_OBS = auto()
     """Focus group contains raw obs."""
 
-    dpa_astig_group_raw_obs = auto()
+    DPA_ASTIG_GROUP_RAW_OBS = auto()
     """Astigmatism group contains raw obs."""
 
-    dpa_oof_group_raw_obs = auto()
+    DPA_OOF_GROUP_RAW_OBS = auto()
     """OOF group contains raw obs."""
 
     # Generic collection
-    dpa_named_group_data_prod = auto()
+    DPA_NAMED_GROUP_DATA_PROD = auto()
     """Named group contains any data product."""
 
 
@@ -237,8 +220,8 @@ class ToltecInfo:
 
     # Interface → master mapping
     interface_master: ClassVar[dict[str, MasterType]] = {
-        **{iface: MasterType.ics for iface in ics_interfaces},
-        **{iface: MasterType.tcs for iface in tcs_interfaces},
+        **{iface: MasterType.ICS for iface in ics_interfaces},
+        **{iface: MasterType.TCS for iface in tcs_interfaces},
     }
 
     # Valid obsnum range (from TolTEC operational history)
@@ -261,4 +244,3 @@ class ToltecInfo:
         "toltec11": "a2000",
         "toltec12": "a2000",
     }
-

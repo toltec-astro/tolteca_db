@@ -1,128 +1,79 @@
-"""Association ORM models: AssocRecord, AssocEdgeRecord.
-
-AssocRecord — one row per association group (e.g. a cal→science mapping).
-AssocEdgeRecord — one row per product→assoc edge (input or output role).
-"""
+"""Provenance association models: DataProdAssocType, DataProdAssoc."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-from sqlalchemy import Float, ForeignKey, Index, Integer, String
+from sqlalchemy import Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from tolteca_db.models.metadata import ProcessContext, adaptix_json_type
 from tolteca_db.models.orm.base import Base
-from tolteca_db.utils import Context, Created_at, Pk, Updated_at
-
-if TYPE_CHECKING:
-    from tolteca_db.models.orm.registry import DataProdRecord
-    from tolteca_db.models.orm.task import TaskRecord
+from tolteca_db.utils import Created_at, Desc, LabelKey, Pk, fk
 
 
-class AssocRecord(Base):
-    """One row per association group produced by an association rule.
+class DataProdAssocType(Base):
+    """
+    Registry of data product association types.
 
-    An association groups a set of :class:`~tolteca_db.models.orm.registry.DataProdRecord`
-    rows into a named logical unit (e.g. a calibration set).  Edges are stored in
-    :class:`AssocEdgeRecord`.
+    Defines edge types for the provenance graph.
 
     Attributes
     ----------
     pk : int
         Integer primary key.
-    uid : str
-        Unique human-readable identifier.
-    rule_name : str
-        Name of the association rule that produced this group.
-    context : dict | None
-        JSON metadata about the association.
-    status : str
-        Status of the association (``pending``, ``accepted``, ``rejected``).
-    score : float | None
-        Confidence score from the association rule.
+    label : str
+        Type label (e.g. "dpa_reduced_obs_raw_obs").
+    description : str | None
+        Human-readable description.
+    """
+
+    __tablename__ = "data_prod_assoc_type"
+
+    pk: Mapped[Pk]
+
+    label: Mapped[LabelKey]
+
+    description: Mapped[Desc | None]
+
+
+class DataProdAssoc(Base):
+    """
+    Provenance association edges.
+
+    Directed edges representing relationships between products.
+
+    Attributes
+    ----------
+    pk : int
+        Autoincrement primary key.
+    data_prod_assoc_type_fk : int
+        Foreign key to data_prod_assoc_type.
+    src_data_prod_fk : int
+        Source product FK (data_prod.pk).
+    dst_data_prod_fk : int
+        Destination product FK (data_prod.pk).
+    context : ProcessContext | None
+        Process metadata (module, version, config).
     created_at : datetime
-        Database insert timestamp.
-    updated_at : datetime
-        Last update timestamp.
-    edges : list[AssocEdgeRecord]
-        Product edges (inputs + outputs) in this association.
-    tasks : list[TaskRecord]
-        Reduction tasks triggered by this association.
+        Creation timestamp.
     """
 
-    __tablename__ = "assoc"
+    __tablename__ = "data_prod_assoc"
 
     pk: Mapped[Pk]
-    uid: Mapped[str] = mapped_column(String(256), unique=True, index=True)
-    rule_name: Mapped[str] = mapped_column(String(64), index=True)
-    context: Mapped[Context]
-    status: Mapped[str] = mapped_column(
-        String(16), index=True, default="pending"
+
+    data_prod_assoc_type_fk: Mapped[int] = fk("data_prod_assoc_type", index=True)
+
+    src_data_prod_fk: Mapped[int] = fk("data_prod", index=True)
+
+    dst_data_prod_fk: Mapped[int] = fk("data_prod", index=True)
+
+    context: Mapped[ProcessContext] = mapped_column(
+        adaptix_json_type(ProcessContext)
     )
-    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     created_at: Mapped[Created_at]
-    updated_at: Mapped[Updated_at]
-
-    # Relationships
-    edges: Mapped[list[AssocEdgeRecord]] = relationship(
-        back_populates="assoc",
-        cascade="all, delete-orphan",
-    )
-    tasks: Mapped[list[TaskRecord]] = relationship(
-        back_populates="assoc",
-        cascade="all, delete-orphan",
-    )
 
     __table_args__ = (
-        Index("ix_assoc_rule_status", "rule_name", "status"),
+        Index("ix_assoc_src_type", "data_prod_assoc_type_fk", "src_data_prod_fk"),
+        Index("ix_assoc_dst_type", "data_prod_assoc_type_fk", "dst_data_prod_fk"),
     )
-
-    def __repr__(self) -> str:
-        return f"AssocRecord(uid={self.uid!r}, rule_name={self.rule_name!r})"
-
-
-class AssocEdgeRecord(Base):
-    """Edge linking a data product to an association group.
-
-    Each row says: "data product *X* is an *input/output* for association *A*".
-
-    Attributes
-    ----------
-    pk : int
-        Integer primary key.
-    assoc_fk : int
-        Foreign key to :class:`AssocRecord`.
-    data_prod_fk : int
-        Foreign key to :class:`~tolteca_db.models.orm.registry.DataProdRecord`.
-    role : str
-        Edge role (``input`` or ``output``).
-    assoc : AssocRecord
-        Parent association.
-    data_prod : DataProdRecord
-        Referenced data product.
-    """
-
-    __tablename__ = "assoc_edge"
-
-    pk: Mapped[Pk]
-    assoc_fk: Mapped[int] = mapped_column(
-        Integer, ForeignKey("assoc.pk"), index=True
-    )
-    data_prod_fk: Mapped[int] = mapped_column(
-        Integer, ForeignKey("data_prod.pk"), index=True
-    )
-    role: Mapped[str] = mapped_column(String(32))
-
-    # Relationships
-    assoc: Mapped[AssocRecord] = relationship(back_populates="edges")
-    data_prod: Mapped[DataProdRecord] = relationship(back_populates="assoc_edges")
-
-    __table_args__ = (
-        Index("ix_assoc_edge_assoc_role", "assoc_fk", "role"),
-    )
-
-    def __repr__(self) -> str:
-        return (
-            f"AssocEdgeRecord(assoc_fk={self.assoc_fk!r}, "
-            f"data_prod_fk={self.data_prod_fk!r}, role={self.role!r})"
-        )

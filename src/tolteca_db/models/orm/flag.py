@@ -1,96 +1,100 @@
-"""Flag ORM models: ObsFlagRecord, DataProdFlagRecord.
-
-Quality flags on raw observations and data products.
-"""
+"""Quality flag models: Flag, DataProdFlag."""
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from tolteca_db.models.orm.base import Base
-from tolteca_db.utils import Created_at, Pk
+from tolteca_db.utils import Context, Created_at, Desc, Label, LabelKey, Pk, fk
 
 if TYPE_CHECKING:
-    from tolteca_db.models.orm.registry import DataProdRecord, RawObsRecord
+    from tolteca_db.models.orm.data_prod import DataProd
 
 
-class ObsFlagRecord(Base):
-    """Quality flag on a raw observation.
+class Flag(Base):
+    """
+    Registry of quality flags.
+
+    Uses composite unique constraint (namespace, label) to allow the same
+    label name in different namespaces (e.g. namespace="qa" + label="SATURATED"
+    vs namespace="detector" + label="SATURATED").
 
     Attributes
     ----------
     pk : int
         Integer primary key.
-    raw_obs_uid : str
-        Foreign key to :class:`~tolteca_db.models.orm.registry.RawObsRecord`.
-    flag_reason : str
-        Human-readable reason for the flag.
-    flag_source : str
-        Origin of the flag (e.g. ``auto``, ``manual``, ``pipeline``).
-    flagged_at : datetime
-        UTC timestamp when the flag was asserted.
-    raw_obs : RawObsRecord
-        Parent raw observation.
+    label : str
+        Flag name (e.g. "SATURATED", "DEAD_PIXEL").
+    namespace : str
+        Flag namespace (e.g. "qa", "detector", "telescope").
+    description : str | None
+        Human-readable description.
     """
 
-    __tablename__ = "obs_flag"
+    __tablename__ = "flag"
 
     pk: Mapped[Pk]
-    raw_obs_uid: Mapped[str] = mapped_column(
-        String(128), ForeignKey("raw_obs.uid"), index=True
-    )
-    flag_reason: Mapped[str] = mapped_column(String(256))
-    flag_source: Mapped[str] = mapped_column(String(64))
-    flagged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    label: Mapped[LabelKey]
+
+    namespace: Mapped[Label]
+
+    description: Mapped[Desc | None]
 
     # Relationships
-    raw_obs: Mapped[RawObsRecord] = relationship(back_populates="obs_flags")
+    data_prod: Mapped[list[DataProdFlag]] = relationship(
+        back_populates="flag",
+        cascade="all, delete-orphan",
+    )
 
-    def __repr__(self) -> str:
-        return (
-            f"ObsFlagRecord(raw_obs_uid={self.raw_obs_uid!r}, "
-            f"reason={self.flag_reason!r})"
-        )
+    __table_args__ = (
+        UniqueConstraint("namespace", "label", name="uq_flag_namespace_label"),
+    )
 
 
-class DataProdFlagRecord(Base):
-    """Quality flag on a data product.
+class DataProdFlag(Base):
+    """
+    Assigned flags to data products (junction table).
+
+    Composite primary key (data_prod_fk, flag_fk).
 
     Attributes
     ----------
-    pk : int
-        Integer primary key.
     data_prod_fk : int
-        Foreign key to :class:`~tolteca_db.models.orm.registry.DataProdRecord`.
-    flag_reason : str
-        Human-readable reason for the flag.
-    flag_source : str
-        Origin of the flag (e.g. ``auto``, ``manual``, ``pipeline``).
-    flagged_at : datetime
-        UTC timestamp when the flag was asserted.
-    data_prod : DataProdRecord
-        Parent data product.
+        Foreign key to data_prod.
+    flag_fk : int
+        Foreign key to flag.
+    asserted_at : datetime
+        When flag was asserted.
+    asserted_by : str
+        Who/what asserted the flag ("system", "user:jsmith", etc.).
+    context : dict | None
+        Additional context (JSON).
+    data_prod : DataProd
+        Relationship to flagged product.
+    flag : Flag
+        Relationship to flag definition.
     """
 
     __tablename__ = "data_prod_flag"
 
-    pk: Mapped[Pk]
-    data_prod_fk: Mapped[int] = mapped_column(
-        Integer, ForeignKey("data_prod.pk"), index=True
+    data_prod_fk: Mapped[int] = fk("data_prod", primary_key=True)
+
+    flag_fk: Mapped[int] = fk("flag", primary_key=True)
+
+    asserted_at: Mapped[Created_at]
+
+    asserted_by: Mapped[str] = mapped_column(
+        String(64),
+        default="system",
+        index=True,
     )
-    flag_reason: Mapped[str] = mapped_column(String(256))
-    flag_source: Mapped[str] = mapped_column(String(64))
-    flagged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    context: Mapped[Context]
 
     # Relationships
-    data_prod: Mapped[DataProdRecord] = relationship(back_populates="data_prod_flags")
-
-    def __repr__(self) -> str:
-        return (
-            f"DataProdFlagRecord(data_prod_fk={self.data_prod_fk!r}, "
-            f"reason={self.flag_reason!r})"
-        )
+    data_prod: Mapped[DataProd] = relationship(back_populates="flag")
+    flag: Mapped[Flag] = relationship(back_populates="data_prod")
