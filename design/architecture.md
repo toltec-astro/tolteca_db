@@ -113,73 +113,98 @@ A **DataProd** is a logical entity tracked in the database:
 | `dp_map` (future) | blake3 hash | Science maps |
 | `dp_catalog` (future) | blake3 hash | Source catalogs |
 
-**Key:** `dp_raw_obs` is *pre-minted* — it exists logically even before files are acquired. Files are registered as `DataProdStorage` rows under the DataProd.
+**Key:** `dp_raw_obs` is *pre-minted* — it exists as a `data_prod` row before files are acquired. Files are registered as `DataProdSource` rows under the DataProd.
 
-### Level 3: Storage Records
+### Level 3: Source Records
 
-Each **DataProdStorage** row links a DataProd to a physical file at a specific Location:
+Each **DataProdSource** row links a DataProd to a physical file at a specific Location. The `source_uri` string is the self-describing primary key:
 
 ```
-DataProd (dp_raw_obs "tcs-98765-0-0")
-└── DataProdStorage rows:
-    ├── {location: site_data, filepath: "toltec/tcs/toltec0/toltec0_098765...nc",  interface: "nw0",  role: PRIMARY}
-    ├── {location: site_data, filepath: "toltec/tel/tel_098765...nc",               interface: "tel",  role: PRIMARY}
-    ├── {location: server_archive, filepath: "2024/toltec0_098765...nc",            interface: "nw0",  role: MIRROR}
+DataProd pk=42  (data_prod_type=DP_RAW_OBS, meta=RawObsMeta(master='tcs', obsnum=98765, ...))
+└── DataProdSource rows:
+    ├── source_uri="file:///data_lmt/toltec/tcs/toltec0/toltec0_098765_000_0000_timestream.nc"
+    │     location=site_data, role=PRIMARY, meta=RoachInterfaceMeta(nw_id=0, roach=0, ...)
+    ├── source_uri="file:///data_lmt/toltec/tel/tel_toltec_098765_000_0000_tel.nc"
+    │     location=site_data, role=PRIMARY, meta=TelInterfaceMeta(tau=0.08, az_deg=180.3, ...)
+    ├── source_uri="file:///archive/2024/toltec0_098765...nc"
+    │     location=server_archive, role=MIRROR, meta=RoachInterfaceMeta(nw_id=0, ...)
     └── ...
 ```
 
-**Availability state** (`PLANNED` / `PARTIAL` / `AVAILABLE` / `MISSING` / `REMOTE` / `STAGED`) is computed from storage rows, not stored directly.
+**Availability state** (`PLANNED` / `PARTIAL` / `AVAILABLE` / `MISSING` / `REMOTE` / `STAGED`) is computed from source rows per product, not stored as a denormalized column.
 
 ---
 
 ## ORM Schema
 
-### Tables
+### Tables (11)
 
 ```
-Location                  # Registry of data roots (site, server, local, ...)
-DataProdType              # Registry of product types (dp_raw_obs, ...)
-DataKind                  # Registry of data kinds (Raw, TimeOrderedData, ...)
-DataProdAssocType         # Registry of association types (dpa_raw_obs_cal_obs, ...)
-Flag                      # Registry of flag definitions
+Registry tables (seeded at DB init):
+  location              # Registry of data roots (site, server, local, S3, ...)
+  data_prod_type        # Registry of product types (dp_raw_obs, dp_cal_group, ...)
+  data_kind             # Registry of data kinds (VnaSweep, RawTimeStream, ...)
+  data_prod_assoc_type  # Registry of association edge types
+  flag                  # Registry of flag definitions (namespace + label)
 
-DataProd                  # Logical data products (pk = blake3 UID string)
-DataProdStorage           # Physical file locations (one row per interface per location)
-DataProdDataKind          # Junction: product ↔ kind
-DataProdAssoc             # Provenance graph edges
-DataProdFlag              # Quality flags on products
-ReductionTask             # Idempotent reduction task tracking
-Event                     # Append-only audit log
+Core tables:
+  data_prod             # Unified logical data product (ALL types, including raw obs)
+  data_prod_data_kind   # Junction: product ↔ kind  (many-to-many)
+  data_prod_source      # Physical file / URI per product (one row per interface per location)
+  data_prod_assoc       # Directed provenance edge: src_fk → dst_fk
+  data_prod_flag        # Junction: product ↔ flag
+
+Audit:
+  event_log             # Append-only audit log
 ```
+
+**Key:** `dp_raw_obs` is NOT a separate table — it is a `data_prod` row with `meta = RawObsMeta(...)`. This mirrors the v2.5 design exactly (see `spike-orm-schema-v25-vs-v3.md`).
 
 ### Naming Conventions
 
-- Primary keys: `pk` (integer) or `pk` (string for content-addressed DataProd)
+- Primary keys: `pk` (integer auto-increment) for all tables; exception: `data_prod_source.source_uri` (string URI)
 - Foreign keys: `{entity}_fk` suffix (e.g., `data_prod_fk`, `location_fk`)
-- All timestamps: timezone-aware, database-generated
-- Metadata: JSON column named `meta`, type-safe via adaptix models
+- All timestamps: timezone-aware, database-generated defaults
+- Metadata: JSON column named `meta`, typed via `AdaptixJSON[Union type]`
+- String enum values: **UPPERCASE** to be visually distinct from column names
 
-### Metadata Models (adaptix)
+### Metadata Models (AdaptixJSON)
 
-One metadata model per product type, in `models/metadata.py`:
+One metadata dataclass per product type and per interface class, in `models/metadata.py`.
 
+**DataProd metadata (`AnyDataProdMeta` — discriminated union):**
 ```python
 @dataclass
 class RawObsMeta:
-    master: str
+    """meta for data_prod rows where data_prod_type = 'DP_RAW_OBS'."""
+    master: str                     # MasterType value
     obsnum: int
     subobsnum: int
     scannum: int
-    data_kind: str | None = None     # e.g. "vna_sweep", "targ_sweep", "timestream"
+    data_kind: int                  # DataKind flags bitfield
+    # Denormalized telescope fields (from TelInterfaceMeta) for direct querying:
+    source_name: str | None = None
+    project_id: str | None = None
+    tau: float | None = None
+    az_deg: float | None = None
+    el_deg: float | None = None
+    obs_datetime: datetime | None = None
+    # ... additional tel fields
 
 @dataclass
-class InterfaceFileMeta:
-    interface_id: str                 # e.g. "nw0", "nw1", "tel"
-    toltec_db_id: int | None = None   # roach ID / ROACH ID from filename
-    instrument: str | None = None    # e.g. "toltec"
+class RoachInterfaceMeta:
+    """meta for data_prod_source rows for toltec[0-12] interfaces."""
+    type: Literal["roach"] = "roach"   # discriminator
+    nw_id: int | None = None
+    roach: int | None = None
+    interface: str | None = None
+    hostname: str | None = None
+    data_kind: int | None = None
+    obsnum: int | None = None
+    # ...
 ```
 
-No other metadata shapes are stored as arbitrary JSON dicts — all metadata is typed.
+No free-form `dict[str, Any]` fields. All `meta` columns are typed via `AdaptixJSON`.
 
 ---
 
@@ -338,11 +363,11 @@ The `create_database(url, read_only=False)` factory auto-selects the right imple
 
 ### Content Addressing
 
-- `dp_raw_obs` PK: deterministic string `"{master}-{obsnum}-{subobsnum}-{scannum}"` — *not* a hash (human-readable, stable)  
-- Derived products PK: blake3 hash of canonical JSON `{type, input_set, params}`  
-- File content hash: blake3 of file bytes (with sha256 fallback), stored in `DataProdStorage.content_hash`
-
-> **Rationale change from v2.5:** Raw obs have human-readable PKs because they are minted from a well-defined namespace. Using a hash for them added indirection without benefit.
+- All `data_prod` rows use an **integer auto-increment PK** — same as v2.5 and consistent with the unified product table design. Raw obs is not special.
+- Identity of a raw obs is carried in `meta: RawObsMeta` (obsnum, subobsnum, scannum, master). A derived `obsspec_uid` string column *may* be added as an indexed computed column for query efficiency.
+- Derived products store a `content_hash` (blake3) computed from canonical JSON `{type, input_set, params}` so that the same reduction run is idempotent.
+- File content hash: blake3 of file bytes (with md5 fallback for legacy files), stored in `DataProdSource.checksum`.
+- `DataProdSource.source_uri` is a **self-describing string PK** (full URI), making it directly queryable without a join.
 
 ---
 
@@ -436,11 +461,16 @@ See `adr-0001-human-readable-raw-obs-pk.md` and subsequent ADR files for rationa
 
 | Aspect | v2.5 | v3.x |
 |--------|-------|-------|
-| Raw obs PK | blake3 hash string | `{master}-{obsnum}-{subobsnum}-{scannum}` (human-readable) |
-| ObsSpec parser | Duplicated in `api/obs.py`, `associations/`, CLI | Single `obsspec.py` module |
-| `dash/` module | Inside tolteca_db | Moved to tolteca_web |
-| Experimental code | `dagster_per_interface_experiment/` in production tree | Tests only; no experimental modules in production |
-| Test helpers in src | `dagster/test_assets.py`, `dagster/test_resources.py` | Moved to `tests/` |
+| Raw obs in DB | `data_prod` row + `RawObsMeta` | Same — `data_prod` row + `RawObsMeta` (preserved) |
+| `DataProd` PK | `int` auto-increment | `int` auto-increment (preserved) |
+| `DataProdSource` PK | URI string | URI string (preserved) |
+| File metadata table | `data_prod_source` | `data_prod_source` (preserved) |
+| Association model | Directed edges `src→dst` | Directed edges `src→dst` (preserved) |
+| Registry tables | `data_prod_type`, `data_kind`, `data_prod_assoc_type`, `flag` | Same (preserved) |
+| ObsSpec parser | Duplicated in `api/obs.py`, `associations/`, CLI | Single `obsspec.py` module (improved) |
+| `DataKind` | Flag int enum | Extended with more kinds: D21, ReducedSweep, etc. (extended) |
+| `dash/` module | Inside tolteca_db | Moved to tolteca_web (separated) |
+| Experimental code | `dagster_per_interface_experiment/` in production tree | Tests only (cleaned up) |
 | API surface | `api/obs.py`, `repository/file_api.py`, `db/repository.py` | Consolidated: `repository/repository.py` + `compat/file.py` |
-| Association rules | Mixed into engine + helpers | Extracted to `associations/rules.py` (pure functions) |
-| Availability state | Stored as column | Computed on read from storage rows |
+| Association rules | Mixed into engine | Extracted to `associations/rules.py` (pure functions) |
+| Availability state | Computed on read | Computed on read (preserved) |

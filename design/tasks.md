@@ -1,7 +1,7 @@
 # tolteca_db v3.x Task Tracking
 
 **Status:** Active  
-**Last Updated:** 2025-07-15  
+**Last Updated:** 2026-03-10  
 **Branch:** `v3.x`
 
 ---
@@ -49,11 +49,25 @@
 
 ---
 
-## Phase 2: ORM Models ✅ COMPLETE
+## Phase 2: ORM Models ⚠️ NEEDS REDO
 
 **Goal:** Clean SQLAlchemy 2.x ORM layer; all tables defined once, no duplicates.
 
-**10 tables, 34 tests — all passing. Commit: Phase 2 complete.**
+**Status:** Implemented (34 tests passing) but the schema diverges from the constitution — see §2R below for the correct target. This implementation will be replaced by Phase 2R.
+
+**Why it needs redo:** The schema was designed before the user answered the 8 constitutional Q&A questions. Key deviations:
+- Has a separate `raw_obs` table (constitution: raw obs = `data_prod` row with `RawObsMeta`)
+- Uses `file_record` + `storage_root` instead of `data_prod_source` + `location`
+- Uses `assoc` + `assoc_edge` (group+edge) instead of directed `data_prod_assoc`
+- Has `obs_flag` (obs-specific) separate from `data_prod_flag` (should be one table)
+- Has `task` table (constitution: defer, task context in group meta)
+- Missing registry tables: `data_prod_type`, `data_kind`, `data_prod_assoc_type`, `flag`
+- Missing `data_prod_data_kind` junction (many-to-many kinds)
+- Inline catalog columns on `data_prod` instead of `AdaptixJSON[AnyDataProdMeta]`
+
+**The 10-table schema below is SUPERSEDED — kept for reference only.**
+
+**10 tables, 34 tests — all passing. Commit: `Phase 2 complete`.**
 
 ### Schema summary
 
@@ -96,26 +110,156 @@
 
 ---
 
-## Phase 3: Metadata Models (adaptix) ✅ COMPLETE
+## Phase 3: Metadata Models (adaptix) ⚠️ NEEDS REDO
 
-**Goal:** Domain-layer frozen dataclasses + ORM→domain converters + Retort JSON serialisation.
+**Goal:** Typed `AdaptixJSON` metadata dataclasses per product type and per interface; global `Retort`; union discriminator pattern.
 
-**25 tests — all passing. Commit: Phase 3 complete.**
+**Status:** Implemented (25 tests passing) but using the wrong approach — see §3R below for the correct target. This implementation will be replaced by Phase 3R.
 
-### What was built
+**Why it needs redo:** The Phase 3 implementation built 10 frozen domain dataclasses that mirror the (now-superseded) ORM table structure. The correct approach per the constitution is:
+- `AdaptixJSON` typed dataclasses per `data_prod_type` label (not per ORM table)
+- `RawObsMeta`, `ReducedObsMeta`, `CalGroupMeta`, ... — products, not tables
+- `RoachInterfaceMeta`, `TelInterfaceMeta` — for `data_prod_source.meta`
+- `AnyDataProdMeta` union via `tag` discriminator on the ORM column directly
+- No separate domain-layer dataclass hierarchy mirroring ORM tables
+- `PyProject.toml` `filterwarnings` for adaptix 3.0.0b11 compat is kept
+
+**25 tests — all passing (but testing the wrong architecture). Commit: `Phase 3 complete`.**
+
+**The files below are SUPERSEDED — kept for reference.**
+
+### What was built (superseded)
 
 - **10 frozen domain dataclasses** — 1:1 mirror of ORM tables, fully decoupled from SQLAlchemy.
 - **10 manual ORM→domain converter functions** (e.g. `raw_obs_from_record`,  `data_prod_from_record`).
 - **`Retort` JSON serialisation** — `to_dict()` / `from_dict()` for all domain objects; `datetime` → ISO-8601 string.
 
-### Why manual converters instead of `get_converter` (2025-07-15)
-`adaptix.conversion.get_converter` calls `get_type_hints()` on ORM classes at creation time.  Because the ORM modules use `from __future__ import annotations` combined with `TYPE_CHECKING`-only circular imports for relationship fields, Python 3.14 raises `NameError` when trying to evaluate those forward references.  Manual converters avoid this entirely.
+### Why manual converters were needed (still applies in 3R)
+`adaptix.conversion.get_converter` calls `get_type_hints()` on ORM classes at creation time.  Because the ORM modules use `from __future__ import annotations` combined with `TYPE_CHECKING`-only circular imports for relationship fields, Python 3.14 raises `NameError` when trying to evaluate those forward references.  Manual converters avoid this entirely. Phase 3R will also use manual construction.
 
-### Files changed
+### Files changed (superseded)
 - [x] `src/tolteca_db/models/metadata.py` — REWRITTEN: 10 domain dataclasses + 10 converters + `Retort`
 - [x] `src/tolteca_db/models/__init__.py` — updated to re-export all domain classes + converters
 - [x] `pyproject.toml` — added `filterwarnings` entry for adaptix 3.0.0b11 / Python 3.14 compat (`ForwardRef._evaluate` deprecation)
 - [x] `tests/test_models_metadata.py` — NEW: 25 tests in 7 test classes
+
+---
+
+---
+
+## Phase 2R: ORM Models (Redo) ⬜ NOT STARTED
+
+**Goal:** Correct 11-table SQLAlchemy 2.x ORM matching the constitution and v2.5 design.
+
+**Constitutional reference:** `design/toltec_data_file_and_data_flow.md` Q&A; `design/design-adopted-v3x.md` §2.
+
+### Target Schema (11 tables)
+
+See `design/design-adopted-v3x.md` §2 for full column inventory.
+
+#### Files to change
+
+- [ ] `src/tolteca_db/models/orm/registry.py` — REWRITE
+  - [ ] `Location` (data root registry: label, location_type, root_uri, priority)
+  - [ ] `DataProdType` (label, level, description)
+  - [ ] `DataKind` (label, category, description)
+  - [ ] `DataProdAssocType` (label, description)
+  - [ ] `Flag` (namespace, label, description; UNIQUE namespace+label)
+  - [ ] Remove `RawObsRecord`, `DataProdRecord` (they move to `data_prod.py`)
+
+- [ ] `src/tolteca_db/models/orm/data_prod.py` — REWRITE
+  - [ ] `DataProd` (pk int, data_prod_type_fk, lifecycle_status, availability_state, content_hash, meta AdaptixJSON)
+  - [ ] `DataProdDataKind` junction (data_prod_fk, data_kind_fk, applied_at, source, confidence)
+  - [ ] `DataProdSource` (source_uri PK str, data_prod_fk, location_fk, role, availability_state, size, checksum, last_verified_at, meta AdaptixJSON)
+  - [ ] Remove `StorageRootRecord`, `FileRecord`
+
+- [ ] `src/tolteca_db/models/orm/assoc.py` — REWRITE
+  - [ ] `DataProdAssoc` (pk, data_prod_assoc_type_fk, src_data_prod_fk, dst_data_prod_fk, context JSON)
+  - [ ] Remove `AssocRecord`, `AssocEdgeRecord`
+
+- [ ] `src/tolteca_db/models/orm/flag.py` — REWRITE
+  - [ ] `DataProdFlag` (data_prod_fk, flag_fk, asserted_at, asserted_by, context)
+  - [ ] Remove `ObsFlagRecord`, `DataProdFlagRecord`
+
+- [ ] `src/tolteca_db/models/orm/task.py` — DELETE (task context lives in meta)
+
+- [ ] `src/tolteca_db/models/orm/event.py` — REWRITE
+  - [ ] `EventLog` (seq int, event_type, entity_type, entity_id, payload JSON, occurred_at)
+  - [ ] Remove `EventRecord`
+
+- [ ] `src/tolteca_db/models/orm/__init__.py` — UPDATE re-exports
+- [ ] `src/tolteca_db/models/__init__.py` — UPDATE re-exports
+
+- [ ] `tests/test_models_orm.py` — REWRITE (new 11-table schema)
+  - [ ] Registry CRUD round-trips
+  - [ ] DataProd + DataProdSource insert/query
+  - [ ] DataProdDataKind many-to-many
+  - [ ] DataProdAssoc directed edge insert/query
+  - [ ] DataProdFlag junction insert/query
+  - [ ] EventLog insert/query
+  - [ ] No tests for raw_obs table (it doesn't exist)
+
+---
+
+## Phase 3R: Metadata Models (Redo) ⬜ NOT STARTED
+
+**Goal:** Typed `AdaptixJSON` metadata dataclasses for `data_prod.meta` and `data_prod_source.meta`.
+
+**Constitutional reference:** `design/design-adopted-v3x.md` §3.
+
+### Target Models
+
+#### DataProd metadata (`AnyDataProdMeta`)
+
+- [ ] `DataProdMetaBase` base class (name, data_prod_type, description, obs_datetime)
+- [ ] `ObsIdMixin` (obsnum, subobsnum, scannum, master)
+- [ ] `TelMetaMixin` (source_name, project_id, tau, az_deg, el_deg, obs_datetime, m1_zernike, m2_offset_mm, ...)
+- [ ] `RawObsMeta(tag="dp_raw_obs")` — inherits ObsIdMixin + TelMetaMixin; data_kind int field
+- [ ] `ReducedObsMeta(tag="dp_reduced_obs")` — obsnum, obsspec_uid, reduction_method, calibration_version, quality_score
+- [ ] `CalGroupMeta(tag="dp_cal_group")` — n_items, group_type, date_range, obs_datetime
+- [ ] `DrivefitMeta(tag="dp_drivefit")` — n_items, fit_method, chi_squared
+- [ ] `FocusGroupMeta(tag="dp_focus_group")` — n_items, focus_positions, best_focus
+- [ ] `AstigGroupMeta(tag="dp_astig_group")` — n_items, astig_positions, best_astig
+- [ ] `OofGroupMeta(tag="dp_oof_group")` — n_items, oof_positions, surface_rms
+- [ ] `NamedGroupMeta(tag="dp_named_group")` — group_name, tags, owner, notes
+- [ ] `AnyDataProdMeta` — Union type (discriminated via `tag` literal)
+
+#### DataProdSource metadata (`AnyInterfaceMeta`)
+
+- [ ] `RoachInterfaceMeta(type="roach")` — nw_id, roach, interface, hostname, data_kind, obsnum, subobsnum, scannum, master
+- [ ] `TelInterfaceMeta(type="tel")` — all telescope fields (az_deg, el_deg, tau, m1_zernike, m2_offset_mm, source_name, project_id, obs_datetime, valid, ...)
+- [ ] `HwprInterfaceMeta(type="hwpr")` — obsnum, subobsnum, scannum, master; extend as needed
+- [ ] `AnyInterfaceMeta` — Union type (discriminated via `type` literal)
+
+#### Association context
+
+- [ ] `ProcessContext` — module, version, config dict
+
+#### AdaptixJSON integration
+
+- [ ] `adaptix_json_type()` factory: creates `AdaptixJSON[T]` type annotation factory
+- [ ] Global `_retort` instance in `metadata.py` for all serialization
+- [ ] Applied to: `DataProd.meta`, `DataProdSource.meta`, `DataProdAssoc.context`
+
+#### Files to change
+
+- [ ] `src/tolteca_db/models/metadata.py` — REWRITE
+  - [ ] All dataclasses above
+  - [ ] `AnyDataProdMeta`, `AnyInterfaceMeta` union types
+  - [ ] `_retort` global; `adaptix_json_type()` factory
+  - [ ] No domain dataclasses mirroring ORM tables
+  - [ ] No ORM→domain converter functions
+  - [ ] No separate `Retort` for domain object JSON (that concern moves to repository layer or CLI)
+
+- [ ] `src/tolteca_db/models/__init__.py` — UPDATE re-exports to metadata classes only
+
+- [ ] `tests/test_models_metadata.py` — REWRITE
+  - [ ] `RawObsMeta` roundtrip via `_retort`
+  - [ ] `AnyDataProdMeta` union discrimination
+  - [ ] `RoachInterfaceMeta` roundtrip
+  - [ ] `TelInterfaceMeta` roundtrip
+  - [ ] `AnyInterfaceMeta` union discrimination
+  - [ ] `AdaptixJSON` column serialization via mock ORM session
 
 ---
 
