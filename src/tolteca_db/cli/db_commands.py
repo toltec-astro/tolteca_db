@@ -64,7 +64,6 @@ def init_database(
     engine = get_engine(db_url)
     console.print(f"Database: {engine.url}")
 
-    # Check if already initialized
     inspector = inspect(engine)
     existing_tables = inspector.get_table_names()
 
@@ -72,37 +71,35 @@ def init_database(
         console.print(
             f"[green]✓[/green] Database already initialized ({len(existing_tables)} tables)"
         )
-        return
+    else:
+        console.print("Initializing database...")
+        create_db_and_tables(engine)
+        console.print("[green]✓[/green] Tables created")
 
-    # Create tables
-    console.print("Initializing database...")
-    create_db_and_tables(engine)
-    console.print("[green]✓[/green] Tables created")
-
-    # Populate registry if requested
-    if create_registry:
+    # Reconcile requested seed data even when the schema already exists. This
+    # matters when a location is configured after the database was first made.
+    if create_registry or data_root is not None:
         with Session(engine) as session:
-            # Populate DataProdType
-            for type_const in DataProdTypeConst:
-                if (
-                    not session.query(DataProdType)
-                    .filter(DataProdType.label == type_const.value)
-                    .first()
-                ):
-                    session.add(DataProdType(label=type_const.value))
+            if create_registry:
+                for type_const in DataProdTypeConst:
+                    if (
+                        not session.query(DataProdType)
+                        .filter(DataProdType.label == type_const.value)
+                        .first()
+                    ):
+                        session.add(DataProdType(label=type_const.value))
 
-            # Populate DataProdAssocType
-            for assoc_const in DataProdAssocTypeConst:
-                if (
-                    not session.query(DataProdAssocType)
-                    .filter(DataProdAssocType.label == assoc_const.value)
-                    .first()
-                ):
-                    session.add(DataProdAssocType(label=assoc_const.value))
+                for assoc_const in DataProdAssocTypeConst:
+                    if (
+                        not session.query(DataProdAssocType)
+                        .filter(DataProdAssocType.label == assoc_const.value)
+                        .first()
+                    ):
+                        session.add(DataProdAssocType(label=assoc_const.value))
 
-            # Populate DataKind (ToltecDataKind flags)
-            for kind in ToltecDataKind:
-                if kind.name != "RawSweep":  # Skip composite flag
+                for kind in ToltecDataKind:
+                    if kind.name == "RawSweep":  # Skip composite flag
+                        continue
                     if (
                         not session.query(DataKind)
                         .filter(DataKind.label == kind.name)
@@ -115,37 +112,52 @@ def init_database(
                         )
                         session.add(DataKind(label=kind.name, category=category))
 
-            # Populate Location if data_root provided
             if data_root is not None:
-                # Expand and normalize path (preserve symlinks)
-                import os
-                from pathlib import Path
-                expanded_path = Path(os.path.expanduser(data_root))
-                expanded_path = Path(os.path.normpath(expanded_path.absolute()))
-                root_uri = f"file://{expanded_path}"
-                
-                # Check if location already exists
-                existing_loc = session.query(Location).filter(Location.label == location).first()
-                if not existing_loc:
-                    console.print(f"[green]Creating location '{location}' with data_root:[/green] {expanded_path}")
+                expanded_path = Path(data_root).expanduser().absolute()
+                root_uri = expanded_path.as_uri()
+                existing_loc = (
+                    session.query(Location)
+                    .filter(Location.label == location)
+                    .first()
+                )
+                if existing_loc is None:
+                    console.print(
+                        f"[green]Creating location '{location}' with data_root:[/green] "
+                        f"{expanded_path}"
+                    )
                     session.add(
                         Location(
                             label=location,
                             location_type="filesystem",
                             root_uri=root_uri,
                             priority=10,
-                            meta={
-                                "lon_deg": -97.3149,
-                                "lat_deg": 18.9858,
-                                "alt_m": 4600.0,
-                            } if location == "LMT" else {},
+                            meta=(
+                                {
+                                    "lon_deg": -97.3149,
+                                    "lat_deg": 18.9858,
+                                    "alt_m": 4600.0,
+                                }
+                                if location == "LMT"
+                                else {}
+                            ),
                         )
                     )
+                elif existing_loc.root_uri != root_uri:
+                    console.print(
+                        f"[yellow]Updating location '{location}' data_root:[/yellow] "
+                        f"{expanded_path}"
+                    )
+                    existing_loc.location_type = "filesystem"
+                    existing_loc.root_uri = root_uri
                 else:
-                    console.print(f"[yellow]Location '{location}' already exists with root_uri:[/yellow] {existing_loc.root_uri}")
+                    console.print(
+                        f"[yellow]Location '{location}' already exists with "
+                        f"root_uri:[/yellow] {existing_loc.root_uri}"
+                    )
 
             session.commit()
-            console.print("[green]✓[/green] Registry tables populated")
+            if create_registry:
+                console.print("[green]✓[/green] Registry tables populated")
 
     console.print("[green]✓[/green] Database initialized successfully")
 
