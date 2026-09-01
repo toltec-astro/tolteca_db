@@ -13,9 +13,9 @@ from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import Session
 
 from tolteca_db.constants import ReducedStatus, StorageRole
+from tolteca_db.db.config import create_db_and_tables
 from tolteca_db.models.metadata import RawObsMeta, RoachInterfaceMeta
 from tolteca_db.models.orm import (
-    Base,
     DataKind,
     DataProd,
     DataProdAssoc,
@@ -29,7 +29,6 @@ from tolteca_db.models.orm import (
     Location,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -39,7 +38,7 @@ from tolteca_db.models.orm import (
 def engine():
     """Create in-memory SQLite database with all v3.x tables."""
     engine = create_engine("sqlite:///:memory:", echo=False)
-    Base.metadata.create_all(engine)
+    create_db_and_tables(engine)
     yield engine
     engine.dispose()
 

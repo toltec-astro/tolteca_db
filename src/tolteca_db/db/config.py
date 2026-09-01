@@ -31,8 +31,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
-from sqlalchemy.orm import Session
 from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from tolteca_db.models.orm import Base
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -140,27 +142,6 @@ def create_db_and_tables(engine: Engine) -> None:
     >>> engine = get_engine("duckdb:///:memory:")
     >>> create_db_and_tables(engine)
     """
-    # Import Base first
-    from tolteca_db.models.orm.base import Base
-
-    # Explicitly import ALL models to register them with Base.metadata
-    # This is critical - just importing the orm package isn't enough
-    from tolteca_db.models.orm import (  # noqa: F401
-        DataKind,
-        DataProd,
-        DataProdAssoc,
-        DataProdDataKind,
-        DataProdType,
-        DataProdFlag,
-        DataProdSource,
-        EventLog,
-        Flag,
-        Location,
-        ReductionTask,
-        TaskInput,
-        TaskOutput,
-    )
-
     # Create all tables directly (DuckDB in-memory doesn't need explicit transaction)
     Base.metadata.create_all(engine)
 
